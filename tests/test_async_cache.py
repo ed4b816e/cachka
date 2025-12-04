@@ -17,15 +17,16 @@ async def test_async_cache():
 
     @cached(ttl=10)
     async def wait(time: float):
+        await asyncio.sleep(time)
         raise ValueError("Not cached")
 
-    # Проверяем кэш
-    assert await wait(0.1) == "Done!"  # должно быть из кэша
+    # Проверяем кэш - второй вызов должен вернуть закэшированное значение
+    assert await wait(0.1) == "Done!" # должно быть из кэша
 
     @cached(ttl=10)
     def fib(n):
         return n if n < 2 else fib(n - 1) + fib(n - 2)
 
-    # assert fib(5)
+    assert fib(3)
 
     await cache_registry.shutdown()

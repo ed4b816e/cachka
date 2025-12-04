@@ -43,7 +43,17 @@ def cached(ttl: int = 300, ignore_self: bool = False):
                 if l1_val is not None:
                     return l1_val
 
-                loop = asyncio.get_running_loop()
+                # Get or create event loop for async operations
+                def get_loop():
+                    try:
+                        return asyncio.get_running_loop()
+                    except RuntimeError:
+                        # No running loop, create new one
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        return loop
+                
+                loop = get_loop()
                 future = asyncio.run_coroutine_threadsafe(cache.get(key), loop)
                 cached_val = future.result()
 
@@ -52,7 +62,7 @@ def cached(ttl: int = 300, ignore_self: bool = False):
 
                 result = func(*args, **kwargs)
 
-                loop = asyncio.get_running_loop()
+                loop = get_loop()
                 future = asyncio.run_coroutine_threadsafe(cache.set(key, result, ttl), loop)
                 future.result()
 

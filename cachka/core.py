@@ -140,7 +140,9 @@ class SQLiteStorage(StorageBackend):
                 "SELECT value FROM cache WHERE key = ? AND expires_at > ?", (key, now)
             )
             row = await cursor.fetchone()
-            return self._decrypt(row[0]) if row else None
+            if row and row[0] is not None:
+                return self._decrypt(row[0])
+            return None
 
     async def set(self, key: str, value: bytes, ttl: int):
         expires_at = time.time() + ttl
