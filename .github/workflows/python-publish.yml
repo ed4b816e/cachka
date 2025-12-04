@@ -1,0 +1,36 @@
+name: Publish to PyPI
+
+on:
+  # Запускать при создании релиза (рекомендуется)
+  release:
+    types: [published]
+
+  # ИЛИ при пуше в main (осторожно!):
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "pyproject.toml"  # только если версия изменилась
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install uv
+        run: pipx install uv
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish to PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish
+        with:
+          packages-dir: dist/
