@@ -12,13 +12,14 @@ from .utils import make_cache_key
 logger = getLogger(__name__)
 
 
-def cached(ttl: int = 300):
+def cached(ttl: int = 300, ignore_self: bool = False):
     def decorator(func: Callable):
         if inspect.iscoroutinefunction(func):
             # Async function
             async def wrapper(*args, **kwargs):
                 cache = cache_registry.get()
-                key = make_cache_key(func.__name__, args, kwargs)
+                key_args = args[1:] if ignore_self and args else args
+                key = make_cache_key(func.__name__, key_args, kwargs)
                 cached_val = await cache.get(key)
                 if cached_val is not None:
                     return cached_val
@@ -33,7 +34,8 @@ def cached(ttl: int = 300):
             # Sync function
             def wrapper(*args, **kwargs):
                 cache = cache_registry.get()
-                key = make_cache_key(func.__name__, args, kwargs)
+                key_args = args[1:] if ignore_self and args else args
+                key = make_cache_key(func.__name__, key_args, kwargs)
 
                 # Try L1
                 l1_val = None
