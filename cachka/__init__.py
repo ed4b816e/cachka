@@ -2,7 +2,7 @@ import asyncio
 import inspect
 from typing import Callable
 
-from structlog import getLogger
+from logging import getLogger
 
 from .registry import cache_registry
 from .core import CacheConfig

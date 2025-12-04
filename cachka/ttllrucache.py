@@ -2,8 +2,11 @@ import time
 import threading
 import asyncio
 from collections import OrderedDict
+from logging import getLogger
 from typing import Any, Optional, Callable, Awaitable
 from contextlib import contextmanager, asynccontextmanager
+
+logger = getLogger(__name__)
 
 
 class TTLLRUCache:
@@ -138,7 +141,7 @@ class TTLLRUCache:
             self._bg_task = None
 
     def __getitem__(self, key, default=None):
-        self.get(key=key, default=default)
+        return self.get(key=key, default=default)
 
     def __setitem__(self, key, value):
         self.set(key=key, value=value)

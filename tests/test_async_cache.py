@@ -15,6 +15,10 @@ async def test_async_cache():
 
     assert await wait(0.1) == "Done!" # уменьшите время для теста!
 
+    @cached(ttl=10)
+    async def wait(time: float):
+        raise ValueError("Not cached")
+
     # Проверяем кэш
     assert await wait(0.1) == "Done!"  # должно быть из кэша
 
