@@ -25,8 +25,6 @@ def cached(ttl: int = 300, ignore_self: bool = False):
                     return cached_val
                 result = await func(*args, **kwargs)
                 await cache.set(key, result, ttl)
-
-                logger.warning(result)
                 return result
             return wrapper
 
@@ -53,8 +51,6 @@ def cached(ttl: int = 300, ignore_self: bool = False):
                     return cached_val
 
                 result = func(*args, **kwargs)
-
-                logger.info(result)
 
                 loop = asyncio.get_running_loop()
                 future = asyncio.run_coroutine_threadsafe(cache.set(key, result, ttl), loop)

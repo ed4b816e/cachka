@@ -137,6 +137,12 @@ class TTLLRUCache:
                 pass
             self._bg_task = None
 
+    def __getitem__(self, key, default=None):
+        self.get(key=key, default=default)
+
+    def __setitem__(self, key, value):
+        self.set(key=key, value=value)
+
     def __contains__(self, key: str) -> bool:
         shard = self._get_shard(key)
         return key in shard
