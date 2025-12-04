@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import functools
 from typing import Callable
 
 from logging import getLogger
@@ -16,6 +17,7 @@ def cached(ttl: int = 300, ignore_self: bool = False):
     def decorator(func: Callable):
         if inspect.iscoroutinefunction(func):
             # Async function
+            @functools.wraps(func)
             async def wrapper(*args, **kwargs):
                 cache = cache_registry.get()
                 key_args = args[1:] if ignore_self and args else args
@@ -30,6 +32,7 @@ def cached(ttl: int = 300, ignore_self: bool = False):
 
         else:
             # Sync function
+            @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 cache = cache_registry.get()
                 key_args = args[1:] if ignore_self and args else args

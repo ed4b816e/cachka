@@ -209,38 +209,3 @@ print(health)
 #     "storage": "ok"
 # }
 ```
-
-### FastAPI Integration
-
-```python
-from fastapi import FastAPI
-from cachka import cached, cache_registry, CacheConfig
-
-app = FastAPI()
-
-# Initialize cache on startup
-@app.on_event("startup")
-async def startup():
-    config = CacheConfig(
-        db_path="api_cache.db",
-        enable_metrics=True
-    )
-    cache_registry.initialize(config)
-
-# Cleanup on shutdown
-@app.on_event("shutdown")
-async def shutdown():
-    await cache_registry.shutdown()
-
-# Use cache in your endpoints
-@app.get("/users/{user_id}")
-@cached(ttl=300)
-async def get_user(user_id: int):
-    # Expensive database query - cached for 5 minutes
-    return {"id": user_id, "name": f"User {user_id}"}
-
-@app.get("/health")
-async def health():
-    cache = cache_registry.get()
-    return await cache.health_check()
-```
