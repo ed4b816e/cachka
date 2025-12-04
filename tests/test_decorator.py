@@ -269,6 +269,49 @@ class TestDecoratorIgnoreSelf:
         
         assert call_count[0] == 2  # Вызвалась дважды
 
+    def test_ignore_self_different_classes_same_method_name(self):
+        """Разные классы с одинаковыми именами методов должны иметь разные ключи"""
+        call_count_a = [0]
+        call_count_b = [0]
+        
+        class ServiceA(TestService):
+            @cached(ttl=60, ignore_self=True)
+            def get_data(self, key: str):
+                call_count_a[0] += 1
+                return f"ServiceA_{key}"
+        
+        class ServiceB(TestService):
+            @cached(ttl=60, ignore_self=True)
+            def get_data(self, key: str):
+                call_count_b[0] += 1
+                return f"ServiceB_{key}"
+        
+        service_a = ServiceA("a")
+        service_b = ServiceB("b")
+        
+        # Вызываем метод с одинаковым именем в разных классах
+        result_a1 = service_a.get_data("test")
+        result_b1 = service_b.get_data("test")
+        
+        # Должны быть разные результаты
+        assert result_a1 == "ServiceA_test"
+        assert result_b1 == "ServiceB_test"
+        
+        # Оба должны быть вызваны
+        assert call_count_a[0] == 1
+        assert call_count_b[0] == 1
+        
+        # Повторные вызовы должны использовать кэш
+        result_a2 = service_a.get_data("test")
+        result_b2 = service_b.get_data("test")
+        
+        assert result_a2 == "ServiceA_test"
+        assert result_b2 == "ServiceB_test"
+        
+        # Счетчики не должны увеличиться
+        assert call_count_a[0] == 1
+        assert call_count_b[0] == 1
+
 
 class TestDecoratorMetadata:
     """Тесты сохранения метаданных функции"""

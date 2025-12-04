@@ -7,7 +7,7 @@ from logging import getLogger
 
 from .registry import cache_registry
 from .core import CacheConfig
-from .utils import make_cache_key
+from .utils import prepare_cache_key
 
 
 logger = getLogger(__name__)
@@ -20,8 +20,7 @@ def cached(ttl: int = 300, ignore_self: bool = False):
             @functools.wraps(func)
             async def wrapper(*args, **kwargs):
                 cache = cache_registry.get()
-                key_args = args[1:] if ignore_self and args else args
-                key = make_cache_key(func.__name__, key_args, kwargs)
+                key = prepare_cache_key(func, args, kwargs, ignore_self)
                 cached_val = await cache.get(key)
                 if cached_val is not None:
                     return cached_val
@@ -35,8 +34,7 @@ def cached(ttl: int = 300, ignore_self: bool = False):
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 cache = cache_registry.get()
-                key_args = args[1:] if ignore_self and args else args
-                key = make_cache_key(func.__name__, key_args, kwargs)
+                key = prepare_cache_key(func, args, kwargs, ignore_self)
 
                 # Try L1
                 l1_val = None
