@@ -31,5 +31,11 @@ class CacheRegistry:
         if self._initialized and self._instance:
             await self._instance.graceful_shutdown()
 
+    def reset(self):
+        """Сброс состояния registry (для тестов)"""
+        with self._lock:
+            self._initialized = False
+            self._instance = None
+
 # Global singleton
 cache_registry = CacheRegistry()

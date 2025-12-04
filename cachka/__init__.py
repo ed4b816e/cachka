@@ -47,27 +47,35 @@ def cached(ttl: int = 300, ignore_self: bool = False):
                     return l1_val
 
                 # Get or create event loop for async operations
-                def get_loop():
-                    try:
-                        return asyncio.get_running_loop()
-                    except RuntimeError:
-                        # No running loop, create new one
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        return loop
-                
-                loop = get_loop()
-                future = asyncio.run_coroutine_threadsafe(cache.get(key), loop)
-                cached_val = future.result()
-
-                if cached_val is not None:
-                    return cached_val
-
-                result = func(*args, **kwargs)
-
-                loop = get_loop()
-                future = asyncio.run_coroutine_threadsafe(cache.set(key, result, ttl), loop)
-                future.result()
+                try:
+                    loop = asyncio.get_running_loop()
+                    # Running loop exists, use run_coroutine_threadsafe
+                    future = asyncio.run_coroutine_threadsafe(cache.get(key), loop)
+                    cached_val = future.result()
+                    
+                    if cached_val is not None:
+                        return cached_val
+                    
+                    result = func(*args, **kwargs)
+                    
+                    future = asyncio.run_coroutine_threadsafe(cache.set(key, result, ttl), loop)
+                    future.result()
+                except RuntimeError:
+                    # No running loop, use asyncio.run for isolated execution
+                    async def _get_cached():
+                        return await cache.get(key)
+                    
+                    cached_val = asyncio.run(_get_cached())
+                    
+                    if cached_val is not None:
+                        return cached_val
+                    
+                    result = func(*args, **kwargs)
+                    
+                    async def _set_cached():
+                        await cache.set(key, result, ttl)
+                    
+                    asyncio.run(_set_cached())
 
                 return result
             return wrapper
