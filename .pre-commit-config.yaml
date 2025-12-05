@@ -1,0 +1,37 @@
+fail_fast: false
+
+default_language_version:
+  python: python3.12
+
+repos:
+  # Base
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 'v4.4.0'
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+
+  # Black
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks:
+      - id: black
+
+  # Isort
+  - repo: https://github.com/pycqa/isort
+    rev: 6.0.1
+    hooks:
+      - id: isort
+
+    # Ruff
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.7
+    hooks:
+      - id: ruff
+
+  # Typos
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.29.10
+    hooks:
+      - id: typos

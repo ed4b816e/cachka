@@ -1,18 +1,14 @@
 import asyncio
 import dataclasses
-from contextlib import asynccontextmanager, contextmanager
 
-import aiosqlite
-import sqlite3
-import pickle
 import time
-import os
 import threading
 import secrets
-from typing import Any, Optional, Dict
-from abc import ABC, abstractmethod
+from typing import Any, Optional, Dict, Union
 
-from cachka.ttllrucache import TTLLRUCache
+from cachka.interface import ICache
+from cachka.ttllrucache import TTLLRUCache, TTLLRUCacheAdapter, MemoryCacheConfig
+from cachka.sqlitecache import SQLiteStorage, SQLiteStorageAdapter, SQLiteCacheConfig
 
 # === Optional deps ===
 try:
@@ -33,11 +29,6 @@ except ImportError:
         def __exit__(self, *a): pass
     trace = type('trace', (), {'get_tracer': lambda *a: DummyTracer()})
 
-try:
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    HAS_CRYPTO = True
-except ImportError:
-    HAS_CRYPTO = False
 
 import structlog
 logger = structlog.get_logger(__name__)
@@ -46,206 +37,17 @@ logger = structlog.get_logger(__name__)
 
 @dataclasses.dataclass
 class CacheConfig:
-    db_path: str = "cache.db"
+    """Основная конфигурация кэша"""
     name: str = "default"
-    l1_maxsize: int = 1024
-    l1_ttl: int = 300
     vacuum_interval: Optional[int] = 3600
     cleanup_on_start: bool = True
     enable_metrics: bool = False
-    enable_encryption: bool = False
-    encryption_key: Optional[str] = None  # base64-encoded 32-byte key
-    max_key_length: int = 512
     circuit_breaker_threshold: int = 50
     circuit_breaker_window: int = 60
 
-
-# === Storage Backend ===
-class StorageBackend(ABC):
-    @abstractmethod
-    async def get(self, key: str) -> Optional[bytes]: ...
-    @abstractmethod
-    async def set(self, key: str, value: bytes, ttl: int) -> None: ...
-    @abstractmethod
-    async def cleanup_expired(self) -> int: ...
-    @abstractmethod
-    async def close(self) -> None: ...
-
-
-class SQLiteStorage(StorageBackend):
-    def __init__(self, db_path: str, config: CacheConfig):
-        self.db_path = db_path
-        self.config = config
-        self._connection: Optional[aiosqlite.Connection] = None
-        self._sync_connection: Optional[sqlite3.Connection] = None
-        self._lock = asyncio.Lock()
-        self._sync_lock = threading.Lock()
-        self._encryption_key = None
-
-        if config.enable_encryption and config.encryption_key:
-            if not HAS_CRYPTO:
-                raise RuntimeError("Install 'cryptography' for encryption")
-            import base64
-            raw_key = base64.b64decode(config.encryption_key)
-            if len(raw_key) != 32:
-                raise ValueError("Encryption key must be 32 bytes (base64-encoded)")
-            self._encryption_key = raw_key
-
-    @staticmethod
-    async def _init_db(conn: aiosqlite.Connection):
-        await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.execute("PRAGMA synchronous=NORMAL")
-        await conn.execute("PRAGMA cache_size=-10000")
-        await conn.execute("PRAGMA temp_store=MEMORY")
-
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS cache (
-                key TEXT PRIMARY KEY,
-                value BLOB NOT NULL,
-                expires_at REAL NOT NULL
-            )
-        """)
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_expires ON cache(expires_at)")
-
-    @staticmethod
-    def _init_db_sync(conn: sqlite3.Connection):
-        """Синхронная инициализация БД"""
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA cache_size=-10000")
-        conn.execute("PRAGMA temp_store=MEMORY")
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS cache (
-                key TEXT PRIMARY KEY,
-                value BLOB NOT NULL,
-                expires_at REAL NOT NULL
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_expires ON cache(expires_at)")
-        conn.commit()
-
-    @asynccontextmanager
-    async def _get_connection(self):
-        async with self._lock:
-            if self._connection is None:
-                self._connection = await aiosqlite.connect(
-                    self.db_path,
-                    detect_types=0,
-                    isolation_level=None,
-                    timeout=30.0,
-                )
-                await self._init_db(self._connection)
-            yield self._connection
-
-    @contextmanager
-    def _get_sync_connection(self):
-        """Синхронный context manager для получения соединения"""
-        with self._sync_lock:
-            if self._sync_connection is None:
-                self._sync_connection = sqlite3.connect(
-                    self.db_path,
-                    timeout=30.0,
-                    check_same_thread=False
-                )
-                self._init_db_sync(self._sync_connection)
-            yield self._sync_connection
-
-    def _encrypt(self, data: bytes) -> bytes:
-        if not self._encryption_key:
-            return data
-        aesgcm = AESGCM(self._encryption_key)
-        nonce = os.urandom(12)
-        ct = aesgcm.encrypt(nonce, data, None)
-        return nonce + ct
-
-    def _decrypt(self, data: bytes) -> bytes:
-        if not self._encryption_key:
-            return data
-        if len(data) < 12:
-            raise ValueError("Invalid encrypted data")
-        nonce, ct = data[:12], data[12:]
-        aesgcm = AESGCM(self._encryption_key)
-        return aesgcm.decrypt(nonce, ct, None)
-
-    async def get(self, key: str) -> Optional[bytes]:
-        now = time.time()
-        async with self._get_connection() as conn:
-            cursor = await conn.execute(
-                "SELECT value FROM cache WHERE key = ? AND expires_at > ?", (key, now)
-            )
-            row = await cursor.fetchone()
-            if row and row[0] is not None:
-                return self._decrypt(row[0])
-            return None
-
-    async def set(self, key: str, value: bytes, ttl: int):
-        expires_at = time.time() + ttl
-        encrypted = self._encrypt(value)
-        async with self._get_connection() as conn:
-            await conn.execute(
-                "INSERT OR REPLACE INTO cache (key, value, expires_at) VALUES (?, ?, ?)",
-                (key, encrypted, expires_at)
-            )
-            await conn.commit()
-
-    async def cleanup_expired(self) -> int:
-        now = time.time()
-        async with self._get_connection() as conn:
-            cursor = await conn.execute("DELETE FROM cache WHERE expires_at <= ?", (now,))
-            await conn.commit()
-            return cursor.rowcount
-
-    async def close(self):
-        """Закрывает оба соединения (async и sync)"""
-        if self._connection:
-            await self._connection.close()
-            self._connection = None
-        # Также закрываем синхронное соединение если оно открыто
-        with self._sync_lock:
-            if self._sync_connection:
-                self._sync_connection.close()
-                self._sync_connection = None
-
-    # === Синхронные методы (нативная реализация) ===
-    
-    def get_sync(self, key: str) -> Optional[bytes]:
-        """Синхронное получение значения из кэша"""
-        now = time.time()
-        with self._get_sync_connection() as conn:
-            cursor = conn.execute(
-                "SELECT value FROM cache WHERE key = ? AND expires_at > ?", (key, now)
-            )
-            row = cursor.fetchone()
-            if row and row[0] is not None:
-                return self._decrypt(row[0])
-            return None
-
-    def set_sync(self, key: str, value: bytes, ttl: int) -> None:
-        """Синхронная установка значения в кэш"""
-        expires_at = time.time() + ttl
-        encrypted = self._encrypt(value)
-        with self._get_sync_connection() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO cache (key, value, expires_at) VALUES (?, ?, ?)",
-                (key, encrypted, expires_at)
-            )
-            conn.commit()
-
-    def cleanup_expired_sync(self) -> int:
-        """Синхронная очистка истекших записей"""
-        now = time.time()
-        with self._get_sync_connection() as conn:
-            cursor = conn.execute("DELETE FROM cache WHERE expires_at <= ?", (now,))
-            conn.commit()
-            return cursor.rowcount
-
-    def close_sync(self) -> None:
-        """Синхронное закрытие соединения"""
-        with self._sync_lock:
-            if self._sync_connection:
-                self._sync_connection.close()
-                self._sync_connection = None
+    # Список кэшей: строка (название с дефолтными параметрами) или кортеж (название, конфиг)
+    # Например: ["memory", "sqlite"] или [("memory", MemoryCacheConfig(maxsize=2048)), "sqlite"]
+    cache_layers: list[Union[str, tuple[str, Any]]] = None
 
 
 # === Circuit Breaker ===
@@ -283,13 +85,82 @@ class CircuitBreaker:
             return True
 
 
+# === Cache Factory ===
+def _create_cache_layer(
+    layer_type: str, 
+    layer_config: Optional[Any]
+) -> ICache:
+    """
+    Фабрика для создания кэшей по типу.
+    
+    Args:
+        layer_type: Тип кэша ("memory", "sqlite", и т.д.)
+        layer_config: Конфигурация конкретного кэша (если None, используются дефолтные значения)
+    
+    Returns:
+        Экземпляр ICache
+    """
+    if layer_type == "memory":
+        if layer_config is None:
+            memory_config = MemoryCacheConfig()
+        elif isinstance(layer_config, MemoryCacheConfig):
+            memory_config = layer_config
+        else:
+            raise ValueError(f"Invalid config for memory cache: expected MemoryCacheConfig, got {type(layer_config)}")
+        
+        ttl_cache = TTLLRUCache(
+            maxsize=memory_config.maxsize,
+            ttl=memory_config.ttl,
+            shards=memory_config.shards,
+            enable_metrics=memory_config.enable_metrics,
+            name=memory_config.name
+        )
+        return TTLLRUCacheAdapter(ttl_cache)
+    
+    elif layer_type == "sqlite":
+        if layer_config is None:
+            sqlite_config = SQLiteCacheConfig()
+        elif isinstance(layer_config, SQLiteCacheConfig):
+            sqlite_config = layer_config
+        else:
+            raise ValueError(f"Invalid config for sqlite cache: expected SQLiteCacheConfig, got {type(layer_config)}")
+        
+        storage_backend = SQLiteStorage(sqlite_config.db_path, sqlite_config)
+        return SQLiteStorageAdapter(storage_backend)
+    
+    else:
+        raise ValueError(f"Unknown cache layer type: {layer_type}. Supported types: 'memory', 'sqlite'")
+
+
 # === Main Cache ===
-class AsyncCache:
+class AsyncCache(ICache):
     def __init__(self, config: CacheConfig):
         self.config = config
-        self.storage = SQLiteStorage(config.db_path, config)
-        self._l1_cache = TTLLRUCache(maxsize=config.l1_maxsize, ttl=config.l1_ttl)
-        self._l1_lock = threading.RLock()
+        
+        if not config.cache_layers:
+            config.cache_layers = ["memory", "sqlite"]
+        
+        # Создаем кэши в порядке, указанном в конфиге
+        self._caches: list[ICache] = []
+        self._cache_configs: list[Optional[Any]] = []
+        
+        for layer_spec in config.cache_layers:
+            # Парсим спецификацию слоя: строка или кортеж (название, конфиг)
+            if isinstance(layer_spec, str):
+                layer_type = layer_spec
+                layer_config = None
+            elif isinstance(layer_spec, tuple) and len(layer_spec) == 2:
+                layer_type, layer_config = layer_spec
+            else:
+                raise ValueError(
+                    f"Invalid cache layer specification: {layer_spec}. "
+                    f"Expected str or tuple[str, Any], got {type(layer_spec)}"
+                )
+            
+            cache = _create_cache_layer(layer_type, layer_config)
+            self._caches.append(cache)
+            self._cache_configs.append(layer_config)
+        
         self._circuit_breaker = CircuitBreaker(
             failure_threshold=config.circuit_breaker_threshold,
             recovery_timeout=config.circuit_breaker_window
@@ -299,31 +170,21 @@ class AsyncCache:
         self._gc_task: Optional[asyncio.Task] = None
 
         # Metrics
-        self._metrics = None
         if config.enable_metrics:
             self._init_metrics(config.name)
+        else:
+            self._metrics = None
 
         if config.vacuum_interval:
             self._gc_task = asyncio.create_task(self._maintenance_loop())
 
-    @property
-    def l1_cache(self) -> TTLLRUCache:
-        return self._l1_cache
-
-    @property
-    def l1_lock(self) -> threading.RLock:
-        return self._l1_lock
-
     def _init_metrics(self, cache_name: str):
-        try:
-            from prometheus_client import Counter, Histogram
-            self._metrics = {
-                "requests": Counter("cache_requests_total", "Cache requests", ["cache", "type"]),
-                "duration": Histogram("cache_operation_duration_seconds", "Operation duration", ["cache", "operation"]),
-                "errors": Counter("cache_errors_total", "Cache errors", ["cache", "error_type"]),
-            }
-        except ImportError:
-            self._metrics = None
+        from prometheus_client import Counter, Histogram
+        self._metrics = {
+            "requests": Counter("cache_requests_total", "Cache requests", ["cache", "type"]),
+            "duration": Histogram("cache_operation_duration_seconds", "Operation duration", ["cache", "operation"]),
+            "errors": Counter("cache_errors_total", "Cache errors", ["cache", "error_type"]),
+        }
 
     async def _maintenance_loop(self):
         while not self._shutdown_event.is_set():
@@ -336,13 +197,18 @@ class AsyncCache:
                 slept += sleep_step
 
             if not self._shutdown_event.is_set():
-                await self.storage.cleanup_expired()
+                # Очищаем все кэши, которые поддерживают cleanup_expired
+                for cache in self._caches:
+                    try:
+                        await cache.cleanup_expired()
+                    except NotImplementedError:
+                        pass  # Кэш не поддерживает cleanup_expired
 
     async def get(self, key: str) -> Optional[Any]:
         if not self._circuit_breaker.can_execute():
             logger.warning("circuit_breaker_open", key=key)
             if self._metrics:
-                self._metrics["errors"].labels(error_type="circuit_breaker").inc()
+                self._metrics["errors"].labels(cache=self.config.name, error_type="circuit_breaker").inc()
             return None
 
         with self._tracer.start_as_current_span("cache.get", kind=SpanKind.CLIENT) as span:
@@ -350,40 +216,52 @@ class AsyncCache:
             start = time.perf_counter()
 
             try:
-                with self._l1_lock:
-                    if key in self._l1_cache:
-                        span.set_attribute("cache.hit", "l1")
+                # Проходим по кэшам в порядке их указания в конфиге
+                for i, cache in enumerate(self._caches):
+                    value = await cache.get(key)
+                    if value is not None:
+                        # Найдено в кэше на уровне i
+                        layer_name = f"layer_{i}"
+                        span.set_attribute("cache.hit", layer_name)
                         if self._metrics:
-                            self._metrics["requests"].labels(type="l1_hit").inc()
-                        return self._l1_cache[key]
-
-                raw = await self.storage.get(key)
-                if raw is None:
-                    span.set_attribute("cache.hit", "miss")
-                    if self._metrics:
-                        self._metrics["requests"].labels(type="miss").inc()
-                    return None
-
-                value = pickle.loads(raw)
-                with self._l1_lock:
-                    self._l1_cache[key] = value
-                span.set_attribute("cache.hit", "l2")
+                            self._metrics["requests"].labels(cache=self.config.name, type=f"hit_layer_{i}").inc()
+                        
+                        # Промотируем в предыдущие кэши
+                        for j in range(i):
+                            try:
+                                promo_ttl = self._get_cache_ttl(j)
+                                await self._caches[j].set(key, value, promo_ttl)
+                            except Exception:
+                                pass  # Игнорируем ошибки при промоции
+                        
+                        self._circuit_breaker.call_succeeded()
+                        return value
+                
+                # Не найдено ни в одном кэше
+                span.set_attribute("cache.hit", "miss")
                 if self._metrics:
-                    self._metrics["requests"].labels(type="l2_hit").inc()
+                    self._metrics["requests"].labels(cache=self.config.name, type="miss").inc()
                 self._circuit_breaker.call_succeeded()
-                return value
+                return None
 
             except Exception as e:
                 self._circuit_breaker.call_failed()
                 error_type = type(e).__name__
                 logger.error("cache_get_error", key=key, error=error_type)
                 if self._metrics:
-                    self._metrics["errors"].labels(error_type=error_type).inc()
+                    self._metrics["errors"].labels(cache=self.config.name, error_type=error_type).inc()
                 span.record_exception(e)
                 return None
             finally:
                 if self._metrics:
-                    self._metrics["duration"].labels(operation="get").observe(time.perf_counter() - start)
+                    self._metrics["duration"].labels(cache=self.config.name, operation="get").observe(time.perf_counter() - start)
+
+    def _get_cache_ttl(self, cache_index: int, default_ttl: int = 300) -> int:
+        """Получает TTL для кэша по индексу из его конфига"""
+        cache_config = self._cache_configs[cache_index]
+        if cache_config is not None and isinstance(cache_config, MemoryCacheConfig):
+            return cache_config.ttl
+        return default_ttl
 
     async def set(self, key: str, value: Any, ttl: int):
         if not self._circuit_breaker.can_execute():
@@ -394,11 +272,13 @@ class AsyncCache:
             start = time.perf_counter()
 
             try:
-                pickled = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
-                await self.storage.set(key, pickled, ttl)
-
-                with self._l1_lock:
-                    self._l1_cache[key] = value
+                # Сохраняем во все кэши (write-through)
+                for i, cache in enumerate(self._caches):
+                    try:
+                        cache_ttl = self._get_cache_ttl(i, ttl)
+                        await cache.set(key, value, cache_ttl)
+                    except Exception as e:
+                        logger.warning("cache_set_layer_error", layer=i, error=str(e))
 
                 self._circuit_breaker.call_succeeded()
             except Exception as e:
@@ -406,74 +286,76 @@ class AsyncCache:
                 error_type = type(e).__name__
                 logger.error("cache_set_error", key=key, error=error_type)
                 if self._metrics:
-                    self._metrics["errors"].labels(error_type=error_type).inc()
+                    self._metrics["errors"].labels(cache=self.config.name, error_type=error_type).inc()
                 span.record_exception(e)
             finally:
                 if self._metrics:
-                    self._metrics["duration"].labels(operation="set").observe(time.perf_counter() - start)
+                    self._metrics["duration"].labels(cache=self.config.name, operation="set").observe(time.perf_counter() - start)
 
     # === Синхронные методы (нативная реализация) ===
     
     def get_sync(self, key: str) -> Optional[Any]:
-        """Синхронное получение значения из кэша (нативная реализация)"""
+        """Синхронное получение значения из кэша"""
         if not self._circuit_breaker.can_execute():
             logger.warning("circuit_breaker_open", key=key)
             if self._metrics:
-                self._metrics["errors"].labels(error_type="circuit_breaker").inc()
+                self._metrics["errors"].labels(cache=self.config.name, error_type="circuit_breaker").inc()
             return None
 
         start = time.perf_counter()
 
         try:
-            # Проверяем L1 кэш
-            with self._l1_lock:
-                if key in self._l1_cache:
+            # Проходим по кэшам в порядке их указания в конфиге
+            for i, cache in enumerate(self._caches):
+                value = cache.get_sync(key)
+                if value is not None:
+                    # Найдено в кэше на уровне i
                     if self._metrics:
-                        self._metrics["requests"].labels(type="l1_hit").inc()
-                    return self._l1_cache[key]
-
-            # Получаем из L2 (синхронно)
-            raw = self.storage.get_sync(key)
-            if raw is None:
-                if self._metrics:
-                    self._metrics["requests"].labels(type="miss").inc()
-                return None
-
-            value = pickle.loads(raw)
-            # Промотируем в L1
-            with self._l1_lock:
-                self._l1_cache[key] = value
+                        self._metrics["requests"].labels(cache=self.config.name, type=f"hit_layer_{i}").inc()
+                    
+                    # Промотируем в предыдущие кэши
+                    for j in range(i):
+                        try:
+                            promo_ttl = self._get_cache_ttl(j)
+                            self._caches[j].set_sync(key, value, promo_ttl)
+                        except Exception:
+                            pass  # Игнорируем ошибки при промоции
+                    
+                    self._circuit_breaker.call_succeeded()
+                    return value
             
+            # Не найдено ни в одном кэше
             if self._metrics:
-                self._metrics["requests"].labels(type="l2_hit").inc()
+                self._metrics["requests"].labels(cache=self.config.name, type="miss").inc()
             self._circuit_breaker.call_succeeded()
-            return value
+            return None
 
         except Exception as e:
             self._circuit_breaker.call_failed()
             error_type = type(e).__name__
             logger.error("cache_get_error", key=key, error=error_type)
             if self._metrics:
-                self._metrics["errors"].labels(error_type=error_type).inc()
+                self._metrics["errors"].labels(cache=self.config.name, error_type=error_type).inc()
             return None
         finally:
             if self._metrics:
-                self._metrics["duration"].labels(operation="get").observe(time.perf_counter() - start)
+                self._metrics["duration"].labels(cache=self.config.name, operation="get").observe(time.perf_counter() - start)
 
     def set_sync(self, key: str, value: Any, ttl: int) -> None:
-        """Синхронная установка значения в кэш (нативная реализация)"""
+        """Синхронная установка значения в кэш"""
         if not self._circuit_breaker.can_execute():
             return
 
         start = time.perf_counter()
 
         try:
-            pickled = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
-            self.storage.set_sync(key, pickled, ttl)
-
-            # Обновляем L1
-            with self._l1_lock:
-                self._l1_cache[key] = value
+            # Сохраняем во все кэши (write-through)
+            for i, cache in enumerate(self._caches):
+                try:
+                    cache_ttl = self._get_cache_ttl(i, ttl)
+                    cache.set_sync(key, value, cache_ttl)
+                except Exception as e:
+                    logger.warning("cache_set_layer_error", layer=i, error=str(e))
 
             self._circuit_breaker.call_succeeded()
         except Exception as e:
@@ -481,10 +363,10 @@ class AsyncCache:
             error_type = type(e).__name__
             logger.error("cache_set_error", key=key, error=error_type)
             if self._metrics:
-                self._metrics["errors"].labels(error_type=error_type).inc()
+                self._metrics["errors"].labels(cache=self.config.name, error_type=error_type).inc()
         finally:
             if self._metrics:
-                self._metrics["duration"].labels(operation="set").observe(time.perf_counter() - start)
+                self._metrics["duration"].labels(cache=self.config.name, operation="set").observe(time.perf_counter() - start)
 
     async def health_check(self) -> Dict[str, Any]:
         try:
@@ -498,9 +380,8 @@ class AsyncCache:
 
         return {
             "status": "healthy" if healthy else "unhealthy",
-            "l1_size": len(self._l1_cache),
             "circuit_breaker": self._circuit_breaker.state,
-            "storage": "ok" if healthy else "failed"
+            "cache_layers_count": len(self._caches)
         }
 
     async def graceful_shutdown(self):
@@ -510,7 +391,20 @@ class AsyncCache:
                 await asyncio.wait_for(self._gc_task, timeout=5.0)
             except asyncio.TimeoutError:
                 logger.warning("gc_task_timeout")
-        await self.storage.close()
+        
+        # Закрываем все кэши
+        for cache in self._caches:
+            try:
+                await cache.close()
+            except Exception as e:
+                logger.warning("cache_close_error", error=str(e))
 
     def get_metrics_text(self) -> str:
         return generate_latest().decode('utf-8')
+
+    async def cleanup_expired(self) -> None:
+        for cache in self._caches:
+            await cache.cleanup_expired()
+
+    async def cleanup(self) -> None:
+        await self.cleanup_expired()

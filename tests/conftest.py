@@ -4,17 +4,20 @@
 import pytest
 import asyncio
 from cachka import cache_registry, CacheConfig
+from cachka.sqlitecache import SQLiteCacheConfig
 
 
 @pytest.fixture(scope="function")
 def cache_config():
     """Базовая конфигурация кэша для тестов"""
     return CacheConfig(
-        db_path=":memory:",
+        cache_layers=[
+            "memory",
+            ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
+        ],
         vacuum_interval=None,
         cleanup_on_start=False,
-        enable_metrics=False,
-        enable_encryption=False
+        enable_metrics=False
     )
 
 

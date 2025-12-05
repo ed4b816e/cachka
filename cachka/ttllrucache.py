@@ -1,13 +1,27 @@
 import time
 import threading
 import asyncio
+import dataclasses
 from collections import OrderedDict
-from logging import getLogger
 from typing import Any, Optional, Callable, Awaitable
 from contextlib import contextmanager, asynccontextmanager
 
-logger = getLogger(__name__)
+from cachka.interface import ICache
 
+
+# === Config ===
+
+@dataclasses.dataclass
+class MemoryCacheConfig:
+    """Конфигурация для memory кэша (TTLLRUCache)"""
+    maxsize: int = 1024
+    ttl: int = 300
+    shards: int = 8
+    enable_metrics: bool = False
+    name: str = "memory_cache"
+
+
+# === Implementation ===
 
 class TTLLRUCache:
     def __init__(
@@ -25,7 +39,16 @@ class TTLLRUCache:
         if shards <= 0:
             raise ValueError("shards must be > 0")
 
-        self.maxsize_per_shard = maxsize // shards + 1
+        # Распределяем maxsize по шардам
+        # Если shards=1, то maxsize_per_shard = maxsize
+        # Иначе гарантируем, что сумма >= maxsize, но каждый шард <= maxsize
+        if shards == 1:
+            self.maxsize_per_shard = maxsize
+        else:
+            # Вычисляем размер шарда, но ограничиваем его maxsize
+            # чтобы один шард не мог содержать больше элементов, чем весь кэш
+            calculated_size = maxsize // shards + 1
+            self.maxsize_per_shard = min(calculated_size, maxsize)
         self.ttl = ttl
         self.shards = shards
         self.name = name
@@ -243,8 +266,11 @@ class _LRUTTLShard:
     def set(self, key: str, value: Any) -> None:
         with self._sync_lock():
             now = self._now()
+            # Если ключ уже существует, удаляем его сначала, чтобы гарантировать правильный порядок
+            if key in self._cache:
+                del self._cache[key]
+            # Добавляем ключ в конец (most recently used)
             self._cache[key] = (value, now)
-            self._cache.move_to_end(key)
             evicted = 0
             while len(self._cache) > self.maxsize:
                 self._cache.popitem(last=False)
@@ -323,3 +349,68 @@ class _LRUTTLShard:
         value = await factory()
         await self.set_async(key, value)
         return value
+
+
+# === Adapter ===
+
+class TTLLRUCacheAdapter(ICache):
+    """
+    Адаптер для TTLLRUCache, реализующий интерфейс ICache.
+    
+    TTLLRUCache имеет свой собственный API (get/set для sync, get_async/set_async для async),
+    этот адаптер оборачивает его для соответствия интерфейсу ICache.
+    """
+    
+    def __init__(self, cache: TTLLRUCache):
+        self._cache = cache
+    
+    async def get(self, key: str) -> Optional[Any]:
+        """Асинхронное получение значения из кэша"""
+        return await self._cache.get_async(key)
+    
+    async def set(self, key: str, value: Any, ttl: int) -> None:
+        """
+        Асинхронная установка значения в кэш.
+        
+        Примечание: TTLLRUCache использует глобальный TTL из конфигурации,
+        параметр ttl здесь игнорируется для совместимости с интерфейсом.
+        """
+        await self._cache.set_async(key, value)
+    
+    def get_sync(self, key: str) -> Optional[Any]:
+        """Синхронное получение значения из кэша"""
+        return self._cache.get(key)
+    
+    def set_sync(self, key: str, value: Any, ttl: int) -> None:
+        """
+        Синхронная установка значения в кэш.
+        
+        Примечание: TTLLRUCache использует глобальный TTL из конфигурации,
+        параметр ttl здесь игнорируется для совместимости с интерфейсом.
+        """
+        self._cache.set(key, value)
+    
+    async def delete(self, key: str) -> None:
+        """Удаление ключа из кэша"""
+        await self._cache.delete_async(key)
+    
+    def delete_sync(self, key: str) -> None:
+        """Синхронное удаление ключа из кэша"""
+        self._cache.delete(key)
+    
+    async def cleanup_expired(self) -> int:
+        """Очистка истекших записей"""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._cache.cleanup)
+    
+    def cleanup_expired_sync(self) -> int:
+        """Синхронная очистка истекших записей"""
+        return self._cache.cleanup()
+    
+    async def close(self) -> None:
+        """Закрытие кэша"""
+        await self._cache.stop_background_cleanup()
+    
+    def close_sync(self) -> None:
+        """Синхронное закрытие кэша"""
+        pass  # TTLLRUCache не требует синхронного закрытия

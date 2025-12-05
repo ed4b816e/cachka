@@ -7,6 +7,9 @@ from logging import getLogger
 from .registry import cache_registry
 from .core import CacheConfig
 from .utils import prepare_cache_key
+from .interface import ICache
+from .ttllrucache import TTLLRUCacheAdapter, MemoryCacheConfig
+from .sqlitecache import SQLiteStorageAdapter, SQLiteCacheConfig
 
 
 logger = getLogger(__name__)
@@ -71,4 +74,13 @@ def cached(
     return decorator
 
 
-__all__ = ["cached", "cache_registry", "CacheConfig"]
+__all__ = [
+    "cached", 
+    "cache_registry", 
+    "CacheConfig",
+    "MemoryCacheConfig",
+    "SQLiteCacheConfig",
+    "ICache",
+    "TTLLRUCacheAdapter",
+    "SQLiteStorageAdapter"
+]

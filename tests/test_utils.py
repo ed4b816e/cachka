@@ -1,6 +1,76 @@
 import pytest
 from cachka.utils import make_cache_key, prepare_cache_key
 
+# === Test Classes (вынесены на уровень модуля для pickle) ===
+
+class MyClass:
+    """Тестовый класс для проверки simplified_self_serialization=False"""
+    def my_method(self, x: int):
+        return x * 2
+
+
+class MyService:
+    """Тестовый класс для проверки simplified_self_serialization=True"""
+    def get_data(self, key: str):
+        return f"data_{key}"
+
+
+class ServiceA:
+    """Тестовый класс A для проверки различий между классами"""
+    def get_data(self, key: str):
+        return f"ServiceA_{key}"
+
+
+class ServiceB:
+    """Тестовый класс B для проверки различий между классами"""
+    def get_data(self, key: str):
+        return f"ServiceB_{key}"
+
+
+class MyServiceWithInit:
+    """Тестовый класс с __init__ для проверки разных экземпляров"""
+    def __init__(self, name: str):
+        self.name = name
+    
+    def get_data(self, key: str):
+        return f"data_{key}"
+
+
+class MyServiceProcess:
+    """Тестовый класс для проверки process метода"""
+    def process(self, x: int, y: int):
+        return x + y
+
+
+class MyServiceCompute:
+    """Тестовый класс для проверки compute метода"""
+    def compute(self, x: int, multiplier: int = 2):
+        return x * multiplier
+
+
+class MyServiceGetValue:
+    """Тестовый класс для проверки get_value метода"""
+    def get_value(self):
+        return 42
+
+
+class ServiceAForDifferent:
+    """Тестовый класс A для проверки различий между классами (второй набор)"""
+    def get_data(self, key: str):
+        return f"A_{key}"
+
+
+class ServiceBForDifferent:
+    """Тестовый класс B для проверки различий между классами (второй набор)"""
+    def get_data(self, key: str):
+        return f"B_{key}"
+
+
+class MyServiceForDeprecated:
+    """Тестовый класс для проверки deprecated ignore_self"""
+    def get_data(self, key: str):
+        return f"data_{key}"
+
 
 class TestMakeCacheKey:
     """Тесты генерации ключей кэша"""
@@ -95,10 +165,6 @@ class TestPrepareCacheKey:
 
     def test_prepare_key_with_simplified_self_serialization_false(self):
         """Ключ с simplified_self_serialization=False"""
-        class MyClass:
-            def my_method(self, x: int):
-                return x * 2
-        
         obj = MyClass()
         key1 = prepare_cache_key(MyClass.my_method, (obj, 5), {}, simplified_self_serialization=False)
         key2 = prepare_cache_key(MyClass.my_method, (obj, 5), {}, simplified_self_serialization=False)
@@ -106,10 +172,6 @@ class TestPrepareCacheKey:
 
     def test_prepare_key_with_simplified_self_serialization_true(self):
         """Ключ с simplified_self_serialization=True - исключает self и добавляет имя класса"""
-        class MyService:
-            def get_data(self, key: str):
-                return f"data_{key}"
-        
         service1 = MyService()
         service2 = MyService()
         
@@ -120,14 +182,6 @@ class TestPrepareCacheKey:
 
     def test_prepare_key_simplified_self_serialization_includes_class_name(self):
         """При simplified_self_serialization=True имя класса включается в ключ"""
-        class ServiceA:
-            def get_data(self, key: str):
-                return f"ServiceA_{key}"
-        
-        class ServiceB:
-            def get_data(self, key: str):
-                return f"ServiceB_{key}"
-        
         service_a = ServiceA()
         service_b = ServiceB()
         
@@ -138,41 +192,29 @@ class TestPrepareCacheKey:
 
     def test_prepare_key_simplified_self_serialization_excludes_self_from_args(self):
         """При simplified_self_serialization=True self исключается из аргументов"""
-        class MyService:
-            def process(self, x: int, y: int):
-                return x + y
-        
-        service = MyService()
+        service = MyServiceProcess()
         
         # С simplified_self_serialization=True self не должен влиять на ключ
-        key1 = prepare_cache_key(MyService.process, (service, 1, 2), {}, simplified_self_serialization=True)
-        key2 = prepare_cache_key(MyService.process, (service, 1, 2), {}, simplified_self_serialization=True)
+        key1 = prepare_cache_key(MyServiceProcess.process, (service, 1, 2), {}, simplified_self_serialization=True)
+        key2 = prepare_cache_key(MyServiceProcess.process, (service, 1, 2), {}, simplified_self_serialization=True)
         assert key1 == key2
         
         # Ключ должен зависеть только от аргументов после self
-        key3 = prepare_cache_key(MyService.process, (service, 1, 3), {}, simplified_self_serialization=True)
+        key3 = prepare_cache_key(MyServiceProcess.process, (service, 1, 3), {}, simplified_self_serialization=True)
         assert key1 != key3  # Разные аргументы = разные ключи
 
     def test_prepare_key_simplified_self_serialization_with_kwargs(self):
         """simplified_self_serialization=True с kwargs"""
-        class MyService:
-            def compute(self, x: int, multiplier: int = 2):
-                return x * multiplier
-        
-        service = MyService()
-        key1 = prepare_cache_key(MyService.compute, (service, 5), {"multiplier": 3}, simplified_self_serialization=True)
-        key2 = prepare_cache_key(MyService.compute, (service, 5), {"multiplier": 3}, simplified_self_serialization=True)
+        service = MyServiceCompute()
+        key1 = prepare_cache_key(MyServiceCompute.compute, (service, 5), {"multiplier": 3}, simplified_self_serialization=True)
+        key2 = prepare_cache_key(MyServiceCompute.compute, (service, 5), {"multiplier": 3}, simplified_self_serialization=True)
         assert key1 == key2
 
     def test_prepare_key_simplified_self_serialization_no_args(self):
         """simplified_self_serialization=True без аргументов (кроме self)"""
-        class MyService:
-            def get_value(self):
-                return 42
-        
-        service = MyService()
-        key1 = prepare_cache_key(MyService.get_value, (service,), {}, simplified_self_serialization=True)
-        key2 = prepare_cache_key(MyService.get_value, (service,), {}, simplified_self_serialization=True)
+        service = MyServiceGetValue()
+        key1 = prepare_cache_key(MyServiceGetValue.get_value, (service,), {}, simplified_self_serialization=True)
+        key2 = prepare_cache_key(MyServiceGetValue.get_value, (service,), {}, simplified_self_serialization=True)
         assert key1 == key2
 
     def test_prepare_key_simplified_self_serialization_empty_args(self):
@@ -189,36 +231,21 @@ class TestPrepareCacheKey:
 
     def test_prepare_key_different_instances_same_class_simplified_serialization(self):
         """Разные экземпляры одного класса с simplified_self_serialization=True дают одинаковые ключи"""
-        class MyService:
-            def __init__(self, name: str):
-                self.name = name
-            
-            def get_data(self, key: str):
-                return f"data_{key}"
-        
-        service1 = MyService("service1")
-        service2 = MyService("service2")
+        service1 = MyServiceWithInit("service1")
+        service2 = MyServiceWithInit("service2")
         
         # Разные экземпляры, но simplified_self_serialization=True - ключи должны быть одинаковыми
-        key1 = prepare_cache_key(MyService.get_data, (service1, "test"), {}, simplified_self_serialization=True)
-        key2 = prepare_cache_key(MyService.get_data, (service2, "test"), {}, simplified_self_serialization=True)
+        key1 = prepare_cache_key(MyServiceWithInit.get_data, (service1, "test"), {}, simplified_self_serialization=True)
+        key2 = prepare_cache_key(MyServiceWithInit.get_data, (service2, "test"), {}, simplified_self_serialization=True)
         assert key1 == key2
 
     def test_prepare_key_different_instances_different_class_simplified_serialization(self):
         """Разные классы с simplified_self_serialization=True дают разные ключи"""
-        class ServiceA:
-            def get_data(self, key: str):
-                return f"A_{key}"
+        service_a = ServiceAForDifferent()
+        service_b = ServiceBForDifferent()
         
-        class ServiceB:
-            def get_data(self, key: str):
-                return f"B_{key}"
-        
-        service_a = ServiceA()
-        service_b = ServiceB()
-        
-        key_a = prepare_cache_key(ServiceA.get_data, (service_a, "test"), {}, simplified_self_serialization=True)
-        key_b = prepare_cache_key(ServiceB.get_data, (service_b, "test"), {}, simplified_self_serialization=True)
+        key_a = prepare_cache_key(ServiceAForDifferent.get_data, (service_a, "test"), {}, simplified_self_serialization=True)
+        key_b = prepare_cache_key(ServiceBForDifferent.get_data, (service_b, "test"), {}, simplified_self_serialization=True)
         assert key_a != key_b  # Разные классы = разные ключи
 
     # Тесты для обратной совместимости с ignore_self (deprecated)
@@ -226,18 +253,14 @@ class TestPrepareCacheKey:
         """ignore_self (deprecated) все еще работает"""
         import warnings
         
-        class MyService:
-            def get_data(self, key: str):
-                return f"data_{key}"
-        
-        service1 = MyService()
-        service2 = MyService()
+        service1 = MyServiceForDeprecated()
+        service2 = MyServiceForDeprecated()
         
         # Должно выдать DeprecationWarning, но работать
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            key1 = prepare_cache_key(MyService.get_data, (service1, "test"), {}, ignore_self=True)
-            key2 = prepare_cache_key(MyService.get_data, (service2, "test"), {}, ignore_self=True)
+            key1 = prepare_cache_key(MyServiceForDeprecated.get_data, (service1, "test"), {}, ignore_self=True)
+            key2 = prepare_cache_key(MyServiceForDeprecated.get_data, (service2, "test"), {}, ignore_self=True)
             
             # Проверяем, что было предупреждение
             assert len(w) > 0

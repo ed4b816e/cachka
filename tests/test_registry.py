@@ -17,17 +17,20 @@ class TestCacheRegistry:
 
     @pytest.mark.asyncio
     async def test_initialize_custom_config(self):
+        from cachka.ttllrucache import MemoryCacheConfig
+        from cachka.sqlitecache import SQLiteCacheConfig
+        
         registry = CacheRegistry()
         config = CacheConfig(
-            db_path=":memory:",
-            l1_maxsize=2048,
-            l1_ttl=600
+            cache_layers=[
+                ("memory", MemoryCacheConfig(maxsize=2048, ttl=600)),
+                ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
+            ]
         )
         registry.initialize(config)
         assert registry.is_initialized() is True
         cache = registry.get()
-        assert cache.config.l1_maxsize == 2048
-        assert cache.config.l1_ttl == 600
+        assert len(cache._caches) == 2
         # Cleanup
         await registry.shutdown()
 

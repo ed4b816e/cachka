@@ -13,7 +13,11 @@ class CacheRegistry:
             if self._initialized:
                 raise RuntimeError("Cache already initialized")
             if config is None:
-                config = CacheConfig()
+                # Дефолтная конфигурация: memory + sqlite
+                from cachka.sqlitecache import SQLiteCacheConfig
+                config = CacheConfig(
+                    cache_layers=["memory", ("sqlite", SQLiteCacheConfig(db_path="cache.db"))]
+                )
             self._instance = AsyncCache(config)
             self._initialized = True
 

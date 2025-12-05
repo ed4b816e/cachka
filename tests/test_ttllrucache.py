@@ -85,7 +85,7 @@ class TestTTLLRUCacheLRU:
     """Тесты LRU eviction"""
 
     def test_lru_eviction(self):
-        cache = TTLLRUCache(maxsize=3, ttl=60)
+        cache = TTLLRUCache(maxsize=3, ttl=60, shards=1)  # Один шард для предсказуемости
         cache.set("key1", "value1")
         cache.set("key2", "value2")
         cache.set("key3", "value3")

@@ -2,7 +2,7 @@ import hashlib
 import pickle
 import inspect
 import warnings
-from typing import Tuple, Callable, Any, Optional
+from typing import Tuple, Callable
 
 
 def make_cache_key(func_name: str, args: Tuple, kwargs: dict) -> str:

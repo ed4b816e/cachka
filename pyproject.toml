@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cachka"
-version = "0.1.8"
+version = "0.2.0"
 description = "Enterprise-grade hybrid cache for Python"
 readme = "README.md"
 license = { text = "MIT" }
@@ -59,3 +59,57 @@ packages = ["cachka"]
 asyncio_mode = "auto"
 timeout = 10
 log_cli = "true"
+
+[tool.black]
+line-length = 88
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | *.db
+  | *.db-*
+  | venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+combine_as_imports = true
+remove_redundant_aliases = true
+force_grid_wrap = 2
+
+[tool.ruff]
+fix = true
+show-fixes = true
+
+[tool.ruff.lint]
+fixable = ["Q000", "D102", "D202", "D415", "D102", "D415", "Q001", "D300", "F401", "UP035"]
+extend-select = [
+    "A",    # flake8-builtins
+    "B",   # flake8-bugbear
+    "C4",    # flake8-comprehensions
+    "E",   # pycodestyle
+    "F",   # Pyflakes
+    "UP",  # pyupgrade
+    "Q",    # flake-quotes
+    "N",    # pep8-naming
+    "T20",    # flake8-print
+    "I",    # isort
+    "S",    # flake8-bandit
+    "SIM",    # flake8-simplify
+    "C90",    # {name} is too complex
+    "RUF100",    # unused noqa
+    "UP",  # pyupgrade
+]
+ignore = ["A001", "A003", "E711", "F841", "B008", "C901", "C408", "SIM102", "ANN401", "S104", "I001", "B904", "UP008", "S101", "S311", "A002", "E501"]
+exclude = []
+
+[tool.typos.files]
+extend-exclude = []

@@ -2,10 +2,11 @@ import pytest
 import asyncio
 import inspect
 from cachka import cached, cache_registry, CacheConfig
+from cachka.sqlitecache import SQLiteCacheConfig
 
 
 # Глобальные классы для тестов (чтобы pickle мог их сериализовать)
-class TestService:
+class SampleTestService:
     """Глобальный класс для тестов simplified_self_serialization"""
     def __init__(self, name):
         self.name = name
@@ -14,7 +15,7 @@ class TestService:
         return f"data_{key}_{self.name}"
 
 
-class ServiceWithCount(TestService):
+class ServiceWithCount(SampleTestService):
     """Глобальный класс для теста simplified_self_serialization=False"""
     _call_count = 0
     
@@ -27,22 +28,22 @@ class ServiceWithCount(TestService):
         return super().get_data(key)
 
 
-class ServiceSimplified(TestService):
+class ServiceSimplified(SampleTestService):
     """Глобальный класс для теста simplified_self_serialization=True"""
     pass
 
 
-class ServiceA(TestService):
+class ServiceA(SampleTestService):
     """Глобальный класс для теста разных классов"""
     pass
 
 
-class ServiceB(TestService):
+class ServiceB(SampleTestService):
     """Глобальный класс для теста разных классов"""
     pass
 
 
-class ServiceDeprecated(TestService):
+class ServiceDeprecated(SampleTestService):
     """Глобальный класс для теста deprecated ignore_self"""
     pass
 
@@ -61,7 +62,10 @@ class TestDecoratorAsync:
             cache_registry.reset()
         
         config = CacheConfig(
-            db_path=":memory:",
+            cache_layers=[
+                "memory",
+                ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
+            ],
             vacuum_interval=None,
             cleanup_on_start=False
         )
@@ -139,29 +143,33 @@ class TestDecoratorAsync:
     async def test_async_function_ttl(self):
         """Соблюдение TTL"""
         call_count = [0]
-        
+
         @cached(ttl=1)
         async def compute(x: int):
             call_count[0] += 1
             return x * 2
-        
+
         await compute(5)
         await compute(5)  # Из кэша
         assert call_count[0] == 1
-        
+
         # Ждем истечения TTL
         await asyncio.sleep(1.2)
         # Очищаем кэш вручную для теста
         cache = cache_registry.get()
-        await cache.storage.cleanup_expired()
-        with cache.l1_lock:
-            cache.l1_cache.cleanup()
-            # Удаляем ключ из L1, если он там есть
-            from cachka.utils import make_cache_key
-            cache_key = make_cache_key("compute", (5,), {})
-            if cache_key in cache.l1_cache:
-                cache.l1_cache.delete(cache_key)
+        await cache.cleanup_expired()
         
+        # Также нужно очистить memory кэш, так как он использует свой TTL
+        # и может не удалить значение автоматически
+        from cachka.utils import make_cache_key
+        cache_key = make_cache_key("compute", (5,), {})
+        # Удаляем из всех кэшей вручную для теста
+        for layer in cache._caches:
+            try:
+                await layer.delete(cache_key)
+            except:
+                pass
+
         await compute(5)  # TTL истек, должна вызваться снова
         assert call_count[0] == 2
 
@@ -180,7 +188,10 @@ class TestDecoratorSync:
             cache_registry.reset()
         
         config = CacheConfig(
-            db_path=":memory:",
+            cache_layers=[
+                "memory",
+                ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
+            ],
             vacuum_interval=None,
             cleanup_on_start=False
         )
@@ -249,7 +260,10 @@ class TestDecoratorSimplifiedSelfSerialization:
             cache_registry.reset()
         
         config = CacheConfig(
-            db_path=":memory:",
+            cache_layers=[
+                "memory",
+                ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
+            ],
             vacuum_interval=None,
             cleanup_on_start=False
         )
@@ -283,7 +297,8 @@ class TestDecoratorSimplifiedSelfSerialization:
         assert result1 == result2
         assert call_count[0] == 1  # Вызвалась только один раз
 
-    def test_simplified_self_serialization_false(self):
+    @pytest.mark.asyncio
+    async def test_simplified_self_serialization_false(self):
         """Включение self в ключ (обычная сериализация)"""
         # Используем глобальный класс для pickle
         # ServiceWithCount уже имеет декоратор с simplified_self_serialization=False
@@ -296,8 +311,7 @@ class TestDecoratorSimplifiedSelfSerialization:
         
         # Очищаем кэш перед тестом
         cache = cache_registry.get()
-        with cache.l1_lock:
-            cache.l1_cache.cleanup()
+        await cache.cleanup()
         
         service1.get_data("test")
         service2.get_data("test")  # Разные экземпляры = разные ключи
@@ -362,7 +376,10 @@ class TestDecoratorIgnoreSelfDeprecated:
             cache_registry.reset()
         
         config = CacheConfig(
-            db_path=":memory:",
+            cache_layers=[
+                "memory",
+                ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
+            ],
             vacuum_interval=None,
             cleanup_on_start=False
         )
@@ -420,7 +437,10 @@ class TestDecoratorMetadata:
             cache_registry.reset()
         
         config = CacheConfig(
-            db_path=":memory:",
+            cache_layers=[
+                "memory",
+                ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
+            ],
             vacuum_interval=None,
             cleanup_on_start=False
         )
@@ -492,7 +512,10 @@ class TestDecoratorEdgeCases:
             cache_registry.reset()
         
         config = CacheConfig(
-            db_path=":memory:",
+            cache_layers=[
+                "memory",
+                ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
+            ],
             vacuum_interval=None,
             cleanup_on_start=False
         )

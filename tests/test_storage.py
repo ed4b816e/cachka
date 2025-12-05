@@ -4,7 +4,7 @@ import base64
 import secrets
 import tempfile
 import os
-from cachka.core import SQLiteStorage, CacheConfig
+from cachka.sqlitecache import SQLiteStorage, SQLiteCacheConfig
 
 
 class TestSQLiteStorageBasic:
@@ -21,10 +21,8 @@ class TestSQLiteStorageBasic:
 
     @pytest.fixture
     def config(self, temp_db):
-        return CacheConfig(
+        return SQLiteCacheConfig(
             db_path=temp_db,
-            vacuum_interval=None,
-            cleanup_on_start=False
         )
 
     @pytest.fixture
@@ -120,12 +118,10 @@ class TestSQLiteStorageEncryption:
 
     @pytest.fixture
     def encrypted_config(self, temp_db, encryption_key):
-        return CacheConfig(
+        return SQLiteCacheConfig(
             db_path=temp_db,
             enable_encryption=True,
-            encryption_key=encryption_key,
-            vacuum_interval=None,
-            cleanup_on_start=False
+            encryption_key=encryption_key
         )
 
     @pytest.fixture
@@ -156,7 +152,7 @@ class TestSQLiteStorageEncryption:
     @pytest.mark.asyncio
     async def test_encryption_different_keys(self, temp_db, encryption_key):
         """Разные ключи дают разные шифры"""
-        config1 = CacheConfig(
+        config1 = SQLiteCacheConfig(
             db_path=temp_db,
             enable_encryption=True,
             encryption_key=encryption_key
@@ -166,7 +162,7 @@ class TestSQLiteStorageEncryption:
         # Создаем второй ключ
         key2_bytes = secrets.token_bytes(32)
         key2 = base64.b64encode(key2_bytes).decode()
-        config2 = CacheConfig(
+        config2 = SQLiteCacheConfig(
             db_path=temp_db + ".2",
             enable_encryption=True,
             encryption_key=key2
@@ -196,7 +192,7 @@ class TestSQLiteStorageEncryption:
 
     def test_encryption_without_key_raises(self, temp_db):
         """Ошибка при включенном шифровании без ключа"""
-        config = CacheConfig(
+        config = SQLiteCacheConfig(
             db_path=temp_db,
             enable_encryption=True,
             encryption_key=None
@@ -208,7 +204,7 @@ class TestSQLiteStorageEncryption:
     def test_encryption_invalid_key_raises(self, temp_db):
         """Ошибка при неверном ключе"""
         invalid_key = base64.b64encode(b"short").decode()  # Не 32 байта
-        config = CacheConfig(
+        config = SQLiteCacheConfig(
             db_path=temp_db,
             enable_encryption=True,
             encryption_key=invalid_key
@@ -220,7 +216,7 @@ class TestSQLiteStorageEncryption:
         """Проверка длины ключа"""
         # Правильный ключ (32 байта)
         good_key = base64.b64encode(secrets.token_bytes(32)).decode()
-        config = CacheConfig(
+        config = SQLiteCacheConfig(
             db_path=temp_db,
             enable_encryption=True,
             encryption_key=good_key
@@ -243,10 +239,8 @@ class TestSQLiteStorageEdgeCases:
 
     @pytest.fixture
     def config(self, temp_db):
-        return CacheConfig(
+        return SQLiteCacheConfig(
             db_path=temp_db,
-            vacuum_interval=None,
-            cleanup_on_start=False
         )
 
     @pytest.fixture
@@ -301,10 +295,8 @@ class TestSQLiteStorageSync:
 
     @pytest.fixture
     def config(self, temp_db):
-        return CacheConfig(
+        return SQLiteCacheConfig(
             db_path=temp_db,
-            vacuum_interval=None,
-            cleanup_on_start=False
         )
 
     @pytest.fixture
@@ -359,12 +351,10 @@ class TestSQLiteStorageSync:
         import secrets
         encryption_key = base64.b64encode(secrets.token_bytes(32)).decode()
         
-        config = CacheConfig(
+        config = SQLiteCacheConfig(
             db_path=temp_db,
             enable_encryption=True,
             encryption_key=encryption_key,
-            vacuum_interval=None,
-            cleanup_on_start=False
         )
         storage = SQLiteStorage(config.db_path, config)
         try:
