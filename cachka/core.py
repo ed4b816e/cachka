@@ -1,7 +1,9 @@
 import asyncio
-from contextlib import asynccontextmanager
+import dataclasses
+from contextlib import asynccontextmanager, contextmanager
 
 import aiosqlite
+import sqlite3
 import pickle
 import time
 import os
@@ -41,9 +43,9 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 # === Config ===
-from pydantic import BaseModel
 
-class CacheConfig(BaseModel):
+@dataclasses.dataclass
+class CacheConfig:
     db_path: str = "cache.db"
     name: str = "default"
     l1_maxsize: int = 1024
@@ -75,7 +77,9 @@ class SQLiteStorage(StorageBackend):
         self.db_path = db_path
         self.config = config
         self._connection: Optional[aiosqlite.Connection] = None
+        self._sync_connection: Optional[sqlite3.Connection] = None
         self._lock = asyncio.Lock()
+        self._sync_lock = threading.Lock()
         self._encryption_key = None
 
         if config.enable_encryption and config.encryption_key:
@@ -103,6 +107,24 @@ class SQLiteStorage(StorageBackend):
         """)
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_expires ON cache(expires_at)")
 
+    @staticmethod
+    def _init_db_sync(conn: sqlite3.Connection):
+        """Синхронная инициализация БД"""
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-10000")
+        conn.execute("PRAGMA temp_store=MEMORY")
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS cache (
+                key TEXT PRIMARY KEY,
+                value BLOB NOT NULL,
+                expires_at REAL NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_expires ON cache(expires_at)")
+        conn.commit()
+
     @asynccontextmanager
     async def _get_connection(self):
         async with self._lock:
@@ -115,6 +137,19 @@ class SQLiteStorage(StorageBackend):
                 )
                 await self._init_db(self._connection)
             yield self._connection
+
+    @contextmanager
+    def _get_sync_connection(self):
+        """Синхронный context manager для получения соединения"""
+        with self._sync_lock:
+            if self._sync_connection is None:
+                self._sync_connection = sqlite3.connect(
+                    self.db_path,
+                    timeout=30.0,
+                    check_same_thread=False
+                )
+                self._init_db_sync(self._sync_connection)
+            yield self._sync_connection
 
     def _encrypt(self, data: bytes) -> bytes:
         if not self._encryption_key:
@@ -162,9 +197,55 @@ class SQLiteStorage(StorageBackend):
             return cursor.rowcount
 
     async def close(self):
+        """Закрывает оба соединения (async и sync)"""
         if self._connection:
             await self._connection.close()
             self._connection = None
+        # Также закрываем синхронное соединение если оно открыто
+        with self._sync_lock:
+            if self._sync_connection:
+                self._sync_connection.close()
+                self._sync_connection = None
+
+    # === Синхронные методы (нативная реализация) ===
+    
+    def get_sync(self, key: str) -> Optional[bytes]:
+        """Синхронное получение значения из кэша"""
+        now = time.time()
+        with self._get_sync_connection() as conn:
+            cursor = conn.execute(
+                "SELECT value FROM cache WHERE key = ? AND expires_at > ?", (key, now)
+            )
+            row = cursor.fetchone()
+            if row and row[0] is not None:
+                return self._decrypt(row[0])
+            return None
+
+    def set_sync(self, key: str, value: bytes, ttl: int) -> None:
+        """Синхронная установка значения в кэш"""
+        expires_at = time.time() + ttl
+        encrypted = self._encrypt(value)
+        with self._get_sync_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO cache (key, value, expires_at) VALUES (?, ?, ?)",
+                (key, encrypted, expires_at)
+            )
+            conn.commit()
+
+    def cleanup_expired_sync(self) -> int:
+        """Синхронная очистка истекших записей"""
+        now = time.time()
+        with self._get_sync_connection() as conn:
+            cursor = conn.execute("DELETE FROM cache WHERE expires_at <= ?", (now,))
+            conn.commit()
+            return cursor.rowcount
+
+    def close_sync(self) -> None:
+        """Синхронное закрытие соединения"""
+        with self._sync_lock:
+            if self._sync_connection:
+                self._sync_connection.close()
+                self._sync_connection = None
 
 
 # === Circuit Breaker ===
@@ -330,6 +411,80 @@ class AsyncCache:
             finally:
                 if self._metrics:
                     self._metrics["duration"].labels(operation="set").observe(time.perf_counter() - start)
+
+    # === Синхронные методы (нативная реализация) ===
+    
+    def get_sync(self, key: str) -> Optional[Any]:
+        """Синхронное получение значения из кэша (нативная реализация)"""
+        if not self._circuit_breaker.can_execute():
+            logger.warning("circuit_breaker_open", key=key)
+            if self._metrics:
+                self._metrics["errors"].labels(error_type="circuit_breaker").inc()
+            return None
+
+        start = time.perf_counter()
+
+        try:
+            # Проверяем L1 кэш
+            with self._l1_lock:
+                if key in self._l1_cache:
+                    if self._metrics:
+                        self._metrics["requests"].labels(type="l1_hit").inc()
+                    return self._l1_cache[key]
+
+            # Получаем из L2 (синхронно)
+            raw = self.storage.get_sync(key)
+            if raw is None:
+                if self._metrics:
+                    self._metrics["requests"].labels(type="miss").inc()
+                return None
+
+            value = pickle.loads(raw)
+            # Промотируем в L1
+            with self._l1_lock:
+                self._l1_cache[key] = value
+            
+            if self._metrics:
+                self._metrics["requests"].labels(type="l2_hit").inc()
+            self._circuit_breaker.call_succeeded()
+            return value
+
+        except Exception as e:
+            self._circuit_breaker.call_failed()
+            error_type = type(e).__name__
+            logger.error("cache_get_error", key=key, error=error_type)
+            if self._metrics:
+                self._metrics["errors"].labels(error_type=error_type).inc()
+            return None
+        finally:
+            if self._metrics:
+                self._metrics["duration"].labels(operation="get").observe(time.perf_counter() - start)
+
+    def set_sync(self, key: str, value: Any, ttl: int) -> None:
+        """Синхронная установка значения в кэш (нативная реализация)"""
+        if not self._circuit_breaker.can_execute():
+            return
+
+        start = time.perf_counter()
+
+        try:
+            pickled = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+            self.storage.set_sync(key, pickled, ttl)
+
+            # Обновляем L1
+            with self._l1_lock:
+                self._l1_cache[key] = value
+
+            self._circuit_breaker.call_succeeded()
+        except Exception as e:
+            self._circuit_breaker.call_failed()
+            error_type = type(e).__name__
+            logger.error("cache_set_error", key=key, error=error_type)
+            if self._metrics:
+                self._metrics["errors"].labels(error_type=error_type).inc()
+        finally:
+            if self._metrics:
+                self._metrics["duration"].labels(operation="set").observe(time.perf_counter() - start)
 
     async def health_check(self) -> Dict[str, Any]:
         try:

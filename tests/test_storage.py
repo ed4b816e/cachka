@@ -286,3 +286,115 @@ class TestSQLiteStorageEdgeCases:
         
         await asyncio.gather(*[worker(i) for i in range(5)])
 
+
+class TestSQLiteStorageSync:
+    """Тесты синхронных методов SQLiteStorage (нативная реализация)"""
+
+    @pytest.fixture
+    def temp_db(self):
+        """Создает временную БД для тестов"""
+        fd, path = tempfile.mkstemp(suffix='.db')
+        os.close(fd)
+        yield path
+        if os.path.exists(path):
+            os.unlink(path)
+
+    @pytest.fixture
+    def config(self, temp_db):
+        return CacheConfig(
+            db_path=temp_db,
+            vacuum_interval=None,
+            cleanup_on_start=False
+        )
+
+    @pytest.fixture
+    def storage(self, config):
+        """Синхронный storage (не async)"""
+        storage = SQLiteStorage(config.db_path, config)
+        yield storage
+        storage.close_sync()
+
+    def test_get_set_sync(self, storage):
+        """Синхронные get/set операции"""
+        storage.set_sync("key1", b"value1", ttl=60)
+        result = storage.get_sync("key1")
+        assert result == b"value1"
+
+    def test_get_missing_key_sync(self, storage):
+        """Получение несуществующего ключа (синхронно)"""
+        result = storage.get_sync("missing")
+        assert result is None
+
+    def test_set_overwrite_sync(self, storage):
+        """Перезапись существующего ключа (синхронно)"""
+        storage.set_sync("key1", b"value1", ttl=60)
+        storage.set_sync("key1", b"value2", ttl=60)
+        result = storage.get_sync("key1")
+        assert result == b"value2"
+
+    def test_ttl_expiration_sync(self, storage):
+        """Истечение TTL (синхронно)"""
+        storage.set_sync("key1", b"value1", ttl=1)
+        assert storage.get_sync("key1") == b"value1"
+        time.sleep(1.1)
+        assert storage.get_sync("key1") is None
+
+    def test_cleanup_expired_sync(self, storage):
+        """Синхронная очистка истекших записей"""
+        storage.set_sync("key1", b"value1", ttl=1)
+        storage.set_sync("key2", b"value2", ttl=1)
+        storage.set_sync("key3", b"value3", ttl=100)  # Не истечет
+        
+        time.sleep(1.1)
+        removed = storage.cleanup_expired_sync()
+        assert removed >= 2
+        
+        assert storage.get_sync("key1") is None
+        assert storage.get_sync("key2") is None
+        assert storage.get_sync("key3") == b"value3"
+
+    def test_encryption_sync(self, temp_db):
+        """Шифрование работает в синхронных методах"""
+        import base64
+        import secrets
+        encryption_key = base64.b64encode(secrets.token_bytes(32)).decode()
+        
+        config = CacheConfig(
+            db_path=temp_db,
+            enable_encryption=True,
+            encryption_key=encryption_key,
+            vacuum_interval=None,
+            cleanup_on_start=False
+        )
+        storage = SQLiteStorage(config.db_path, config)
+        try:
+            storage.set_sync("key1", b"value1", ttl=60)
+            result = storage.get_sync("key1")
+            assert result == b"value1"
+        finally:
+            storage.close_sync()
+
+    def test_concurrent_sync_operations(self, storage):
+        """Конкурентные синхронные операции"""
+        import threading
+        
+        def worker(i):
+            for j in range(10):
+                key = f"key_{i}_{j}"
+                storage.set_sync(key, f"value_{i}_{j}".encode(), ttl=60)
+                result = storage.get_sync(key)
+                assert result == f"value_{i}_{j}".encode()
+        
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    def test_close_sync(self, storage):
+        """Закрытие синхронного соединения"""
+        storage.set_sync("key1", b"value1", ttl=60)
+        storage.close_sync()
+        # После close соединение должно быть None
+        assert storage._sync_connection is None
+
