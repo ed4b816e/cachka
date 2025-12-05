@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cachka"
-version = "0.2.1"
+version = "0.2.2a0"
 description = "Enterprise-grade hybrid cache for Python"
 readme = "README.md"
 license = { text = "MIT" }

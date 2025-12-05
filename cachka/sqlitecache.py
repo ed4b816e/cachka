@@ -41,7 +41,7 @@ except ImportError:
 class SQLiteCacheConfig:
     """Конфигурация для SQLite кэша"""
 
-    db_path: str = "cache.db"
+    db_path: str = ":memory:"
     enable_encryption: bool = False
     encryption_key: Optional[str] = None  # base64-encoded 32-byte key
     max_key_length: int = 512
