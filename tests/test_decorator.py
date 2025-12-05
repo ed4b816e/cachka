@@ -4,14 +4,47 @@ import inspect
 from cachka import cached, cache_registry, CacheConfig
 
 
-# Глобальный класс для тестов (чтобы pickle мог его сериализовать)
+# Глобальные классы для тестов (чтобы pickle мог их сериализовать)
 class TestService:
-    """Глобальный класс для тестов ignore_self"""
+    """Глобальный класс для тестов simplified_self_serialization"""
     def __init__(self, name):
         self.name = name
     
     def get_data(self, key: str):
         return f"data_{key}_{self.name}"
+
+
+class ServiceWithCount(TestService):
+    """Глобальный класс для теста simplified_self_serialization=False"""
+    _call_count = 0
+    
+    def __init__(self, name):
+        super().__init__(name)
+    
+    @cached(ttl=60, simplified_self_serialization=False)
+    def get_data(self, key: str):
+        ServiceWithCount._call_count += 1
+        return super().get_data(key)
+
+
+class ServiceSimplified(TestService):
+    """Глобальный класс для теста simplified_self_serialization=True"""
+    pass
+
+
+class ServiceA(TestService):
+    """Глобальный класс для теста разных классов"""
+    pass
+
+
+class ServiceB(TestService):
+    """Глобальный класс для теста разных классов"""
+    pass
+
+
+class ServiceDeprecated(TestService):
+    """Глобальный класс для теста deprecated ignore_self"""
+    pass
 
 
 class TestDecoratorAsync:
@@ -202,8 +235,8 @@ class TestDecoratorSync:
         assert result == 10
 
 
-class TestDecoratorIgnoreSelf:
-    """Тесты ignore_self"""
+class TestDecoratorSimplifiedSelfSerialization:
+    """Тесты simplified_self_serialization"""
 
     @pytest.fixture(autouse=True)
     async def setup_cache(self):
@@ -230,19 +263,19 @@ class TestDecoratorIgnoreSelf:
             cache_registry.reset()
 
     @pytest.mark.asyncio
-    async def test_ignore_self_true(self):
-        """Игнорирование self в ключе"""
+    async def test_simplified_self_serialization_true(self):
+        """Упрощенная сериализация self в ключе"""
         call_count = [0]
         
         # Используем глобальный класс для pickle
-        class ServiceIgnoreSelf(TestService):
-            @cached(ttl=60, ignore_self=True)
+        class ServiceSimplifiedLocal(ServiceSimplified):
+            @cached(ttl=60, simplified_self_serialization=True)
             async def get_data(self, key: str):
                 call_count[0] += 1
                 return f"data_{key}"
         
-        service1 = ServiceIgnoreSelf("service1")
-        service2 = ServiceIgnoreSelf("service2")
+        service1 = ServiceSimplifiedLocal("service1")
+        service2 = ServiceSimplifiedLocal("service2")
         
         result1 = await service1.get_data("test")
         result2 = await service2.get_data("test")  # Должно быть из кэша
@@ -250,44 +283,46 @@ class TestDecoratorIgnoreSelf:
         assert result1 == result2
         assert call_count[0] == 1  # Вызвалась только один раз
 
-    def test_ignore_self_false(self):
-        """Включение self в ключ"""
-        call_count = [0]
-        
+    def test_simplified_self_serialization_false(self):
+        """Включение self в ключ (обычная сериализация)"""
         # Используем глобальный класс для pickle
-        class ServiceWithCount(TestService):
-            @cached(ttl=60, ignore_self=False)
-            def get_data(self, key: str):
-                call_count[0] += 1
-                return super().get_data(key)
+        # ServiceWithCount уже имеет декоратор с simplified_self_serialization=False
+        
+        # Сбрасываем счетчик перед тестом
+        ServiceWithCount._call_count = 0
         
         service1 = ServiceWithCount("service1")
         service2 = ServiceWithCount("service2")
         
+        # Очищаем кэш перед тестом
+        cache = cache_registry.get()
+        with cache.l1_lock:
+            cache.l1_cache.cleanup()
+        
         service1.get_data("test")
         service2.get_data("test")  # Разные экземпляры = разные ключи
         
-        assert call_count[0] == 2  # Вызвалась дважды
+        assert ServiceWithCount._call_count == 2  # Вызвалась дважды
 
-    def test_ignore_self_different_classes_same_method_name(self):
+    def test_simplified_self_serialization_different_classes_same_method_name(self):
         """Разные классы с одинаковыми именами методов должны иметь разные ключи"""
         call_count_a = [0]
         call_count_b = [0]
         
-        class ServiceA(TestService):
-            @cached(ttl=60, ignore_self=True)
+        class ServiceALocal(ServiceA):
+            @cached(ttl=60, simplified_self_serialization=True)
             def get_data(self, key: str):
                 call_count_a[0] += 1
                 return f"ServiceA_{key}"
         
-        class ServiceB(TestService):
-            @cached(ttl=60, ignore_self=True)
+        class ServiceBLocal(ServiceB):
+            @cached(ttl=60, simplified_self_serialization=True)
             def get_data(self, key: str):
                 call_count_b[0] += 1
                 return f"ServiceB_{key}"
         
-        service_a = ServiceA("a")
-        service_b = ServiceB("b")
+        service_a = ServiceALocal("a")
+        service_b = ServiceBLocal("b")
         
         # Вызываем метод с одинаковым именем в разных классах
         result_a1 = service_a.get_data("test")
@@ -311,6 +346,64 @@ class TestDecoratorIgnoreSelf:
         # Счетчики не должны увеличиться
         assert call_count_a[0] == 1
         assert call_count_b[0] == 1
+
+
+class TestDecoratorIgnoreSelfDeprecated:
+    """Тесты для deprecated ignore_self (обратная совместимость)"""
+
+    @pytest.fixture(autouse=True)
+    async def setup_cache(self):
+        # Сбрасываем перед инициализацией
+        if cache_registry.is_initialized():
+            try:
+                await cache_registry.shutdown()
+            except:
+                pass
+            cache_registry.reset()
+        
+        config = CacheConfig(
+            db_path=":memory:",
+            vacuum_interval=None,
+            cleanup_on_start=False
+        )
+        cache_registry.initialize(config)
+        yield
+        if cache_registry.is_initialized():
+            try:
+                await cache_registry.shutdown()
+            except:
+                pass
+            cache_registry.reset()
+
+    @pytest.mark.asyncio
+    async def test_ignore_self_deprecated_still_works(self):
+        """ignore_self (deprecated) все еще работает"""
+        import warnings
+        
+        call_count = [0]
+        
+        # Используем глобальный класс для pickle
+        class ServiceDeprecatedLocal(ServiceDeprecated):
+            @cached(ttl=60, ignore_self=True)
+            async def get_data(self, key: str):
+                call_count[0] += 1
+                return f"data_{key}"
+        
+        service1 = ServiceDeprecatedLocal("service1")
+        service2 = ServiceDeprecatedLocal("service2")
+        
+        # Должно выдать DeprecationWarning
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result1 = await service1.get_data("test")
+            result2 = await service2.get_data("test")
+            
+            # Проверяем, что было предупреждение
+            assert len(w) > 0
+            assert any(issubclass(warning.category, DeprecationWarning) for warning in w)
+        
+        assert result1 == result2
+        assert call_count[0] == 1  # Вызвалась только один раз
 
 
 class TestDecoratorMetadata:
