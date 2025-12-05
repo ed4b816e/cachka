@@ -332,4 +332,3 @@
 4. Мокировать внешние зависимости (Prometheus, OpenTelemetry)
 5. Использовать `freezegun` или `time.time` моки для TTL тестов
 6. Параметризовать тесты где возможно (`@pytest.mark.parametrize`)
-

@@ -1,19 +1,28 @@
-import time
-import threading
 import asyncio
 import dataclasses
+import threading
+import time
 from collections import OrderedDict
-from typing import Any, Optional, Callable, Awaitable
-from contextlib import contextmanager, asynccontextmanager
+from collections.abc import Awaitable
+from contextlib import (
+    asynccontextmanager,
+    contextmanager,
+)
+from typing import (
+    Any,
+    Callable,
+    Optional,
+)
 
 from cachka.interface import ICache
 
-
 # === Config ===
+
 
 @dataclasses.dataclass
 class MemoryCacheConfig:
     """Конфигурация для memory кэша (TTLLRUCache)"""
+
     maxsize: int = 1024
     ttl: int = 300
     shards: int = 8
@@ -22,6 +31,7 @@ class MemoryCacheConfig:
 
 
 # === Implementation ===
+
 
 class TTLLRUCache:
     def __init__(
@@ -72,7 +82,7 @@ class TTLLRUCache:
         except RuntimeError:
             self._is_async = False
 
-    def _get_shard(self, key: str) -> '_LRUTTLShard':
+    def _get_shard(self, key: str) -> "_LRUTTLShard":
         """Consistent shard selection."""
         return self._shards[hash(key) % self.shards]
 
@@ -143,9 +153,7 @@ class TTLLRUCache:
             while True:
                 try:
                     await asyncio.sleep(interval)
-                    await asyncio.get_running_loop().run_in_executor(
-                        None, self.cleanup
-                    )
+                    await asyncio.get_running_loop().run_in_executor(None, self.cleanup)
                 except asyncio.CancelledError:
                     break
                 except Exception:
@@ -177,7 +185,14 @@ class TTLLRUCache:
 class _LRUTTLShard:
     """Internal shard with its own lock and cache."""
 
-    def __init__(self, maxsize: int, ttl: int, enable_metrics: bool, cache_name: str, shard_id: int):
+    def __init__(
+        self,
+        maxsize: int,
+        ttl: int,
+        enable_metrics: bool,
+        cache_name: str,
+        shard_id: int,
+    ):
         self.maxsize = maxsize
         self.ttl = ttl
         self._cache = OrderedDict()
@@ -191,22 +206,17 @@ class _LRUTTLShard:
 
     def _init_metrics(self, cache_name: str, shard_id: int):
         try:
-            from prometheus_client import Counter, Histogram
+            from prometheus_client import Counter
+
             self._metrics = {
                 "hits": Counter(
-                    "cache_l1_hits_total",
-                    "L1 cache hits",
-                    ["cache", "shard"]
+                    "cache_l1_hits_total", "L1 cache hits", ["cache", "shard"]
                 ).labels(cache=cache_name, shard=str(shard_id)),
                 "misses": Counter(
-                    "cache_l1_misses_total",
-                    "L1 cache misses",
-                    ["cache", "shard"]
+                    "cache_l1_misses_total", "L1 cache misses", ["cache", "shard"]
                 ).labels(cache=cache_name, shard=str(shard_id)),
                 "evictions": Counter(
-                    "cache_l1_evictions_total",
-                    "L1 cache evictions",
-                    ["cache", "shard"]
+                    "cache_l1_evictions_total", "L1 cache evictions", ["cache", "shard"]
                 ).labels(cache=cache_name, shard=str(shard_id)),
             }
         except ImportError:
@@ -353,64 +363,65 @@ class _LRUTTLShard:
 
 # === Adapter ===
 
+
 class TTLLRUCacheAdapter(ICache):
     """
     Адаптер для TTLLRUCache, реализующий интерфейс ICache.
-    
+
     TTLLRUCache имеет свой собственный API (get/set для sync, get_async/set_async для async),
     этот адаптер оборачивает его для соответствия интерфейсу ICache.
     """
-    
+
     def __init__(self, cache: TTLLRUCache):
         self._cache = cache
-    
+
     async def get(self, key: str) -> Optional[Any]:
         """Асинхронное получение значения из кэша"""
         return await self._cache.get_async(key)
-    
+
     async def set(self, key: str, value: Any, ttl: int) -> None:
         """
         Асинхронная установка значения в кэш.
-        
+
         Примечание: TTLLRUCache использует глобальный TTL из конфигурации,
         параметр ttl здесь игнорируется для совместимости с интерфейсом.
         """
         await self._cache.set_async(key, value)
-    
+
     def get_sync(self, key: str) -> Optional[Any]:
         """Синхронное получение значения из кэша"""
         return self._cache.get(key)
-    
+
     def set_sync(self, key: str, value: Any, ttl: int) -> None:
         """
         Синхронная установка значения в кэш.
-        
+
         Примечание: TTLLRUCache использует глобальный TTL из конфигурации,
         параметр ttl здесь игнорируется для совместимости с интерфейсом.
         """
         self._cache.set(key, value)
-    
+
     async def delete(self, key: str) -> None:
         """Удаление ключа из кэша"""
         await self._cache.delete_async(key)
-    
+
     def delete_sync(self, key: str) -> None:
         """Синхронное удаление ключа из кэша"""
         self._cache.delete(key)
-    
+
     async def cleanup_expired(self) -> int:
         """Очистка истекших записей"""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._cache.cleanup)
-    
+
     def cleanup_expired_sync(self) -> int:
         """Синхронная очистка истекших записей"""
         return self._cache.cleanup()
-    
+
     async def close(self) -> None:
         """Закрытие кэша"""
         await self._cache.stop_background_cleanup()
-    
+
     def close_sync(self) -> None:
         """Синхронное закрытие кэша"""
         pass  # TTLLRUCache не требует синхронного закрытия

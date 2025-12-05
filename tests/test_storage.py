@@ -1,10 +1,15 @@
-import pytest
-import time
 import base64
+import os
 import secrets
 import tempfile
-import os
-from cachka.sqlitecache import SQLiteStorage, SQLiteCacheConfig
+import time
+
+import pytest
+
+from cachka.sqlitecache import (
+    SQLiteCacheConfig,
+    SQLiteStorage,
+)
 
 
 class TestSQLiteStorageBasic:
@@ -13,7 +18,7 @@ class TestSQLiteStorageBasic:
     @pytest.fixture
     def temp_db(self):
         """Создает временную БД для тестов"""
-        fd, path = tempfile.mkstemp(suffix='.db')
+        fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         yield path
         if os.path.exists(path):
@@ -61,11 +66,11 @@ class TestSQLiteStorageBasic:
         await storage.set("key1", b"value1", ttl=1)
         await storage.set("key2", b"value2", ttl=1)
         await storage.set("key3", b"value3", ttl=100)  # Won't expire
-        
+
         time.sleep(1.1)
         removed = await storage.cleanup_expired()
         assert removed >= 2
-        
+
         assert await storage.get("key1") is None
         assert await storage.get("key2") is None
         assert await storage.get("key3") == b"value3"
@@ -110,7 +115,7 @@ class TestSQLiteStorageEncryption:
 
     @pytest.fixture
     def temp_db(self):
-        fd, path = tempfile.mkstemp(suffix='.db')
+        fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         yield path
         if os.path.exists(path):
@@ -119,9 +124,7 @@ class TestSQLiteStorageEncryption:
     @pytest.fixture
     def encrypted_config(self, temp_db, encryption_key):
         return SQLiteCacheConfig(
-            db_path=temp_db,
-            enable_encryption=True,
-            encryption_key=encryption_key
+            db_path=temp_db, enable_encryption=True, encryption_key=encryption_key
         )
 
     @pytest.fixture
@@ -136,7 +139,9 @@ class TestSQLiteStorageEncryption:
         await encrypted_storage.set("key1", b"value1", ttl=60)
         # Проверяем, что в БД данные зашифрованы
         async with encrypted_storage._get_connection() as conn:
-            cursor = await conn.execute("SELECT value FROM cache WHERE key = ?", ("key1",))
+            cursor = await conn.execute(
+                "SELECT value FROM cache WHERE key = ?", ("key1",)
+            )
             row = await cursor.fetchone()
             assert row is not None
             # Зашифрованные данные должны быть длиннее оригинальных (nonce + ciphertext)
@@ -153,35 +158,35 @@ class TestSQLiteStorageEncryption:
     async def test_encryption_different_keys(self, temp_db, encryption_key):
         """Разные ключи дают разные шифры"""
         config1 = SQLiteCacheConfig(
-            db_path=temp_db,
-            enable_encryption=True,
-            encryption_key=encryption_key
+            db_path=temp_db, enable_encryption=True, encryption_key=encryption_key
         )
         storage1 = SQLiteStorage(temp_db, config1)
-        
+
         # Создаем второй ключ
         key2_bytes = secrets.token_bytes(32)
         key2 = base64.b64encode(key2_bytes).decode()
         config2 = SQLiteCacheConfig(
-            db_path=temp_db + ".2",
-            enable_encryption=True,
-            encryption_key=key2
+            db_path=temp_db + ".2", enable_encryption=True, encryption_key=key2
         )
         storage2 = SQLiteStorage(config2.db_path, config2)
-        
+
         try:
             await storage1.set("key1", b"value1", ttl=60)
             await storage2.set("key1", b"value1", ttl=60)
-            
+
             # Данные должны быть зашифрованы по-разному
             async with storage1._get_connection() as conn1:
-                cursor1 = await conn1.execute("SELECT value FROM cache WHERE key = ?", ("key1",))
+                cursor1 = await conn1.execute(
+                    "SELECT value FROM cache WHERE key = ?", ("key1",)
+                )
                 row1 = await cursor1.fetchone()
-            
+
             async with storage2._get_connection() as conn2:
-                cursor2 = await conn2.execute("SELECT value FROM cache WHERE key = ?", ("key1",))
+                cursor2 = await conn2.execute(
+                    "SELECT value FROM cache WHERE key = ?", ("key1",)
+                )
                 row2 = await cursor2.fetchone()
-            
+
             # Зашифрованные значения должны быть разными
             assert row1[0] != row2[0]
         finally:
@@ -193,9 +198,7 @@ class TestSQLiteStorageEncryption:
     def test_encryption_without_key_raises(self, temp_db):
         """Ошибка при включенном шифровании без ключа"""
         config = SQLiteCacheConfig(
-            db_path=temp_db,
-            enable_encryption=True,
-            encryption_key=None
+            db_path=temp_db, enable_encryption=True, encryption_key=None
         )
         # При создании storage не должно быть ошибки, но при использовании может быть
         storage = SQLiteStorage(temp_db, config)
@@ -205,9 +208,7 @@ class TestSQLiteStorageEncryption:
         """Ошибка при неверном ключе"""
         invalid_key = base64.b64encode(b"short").decode()  # Не 32 байта
         config = SQLiteCacheConfig(
-            db_path=temp_db,
-            enable_encryption=True,
-            encryption_key=invalid_key
+            db_path=temp_db, enable_encryption=True, encryption_key=invalid_key
         )
         with pytest.raises(ValueError, match="Encryption key must be 32 bytes"):
             SQLiteStorage(temp_db, config)
@@ -217,9 +218,7 @@ class TestSQLiteStorageEncryption:
         # Правильный ключ (32 байта)
         good_key = base64.b64encode(secrets.token_bytes(32)).decode()
         config = SQLiteCacheConfig(
-            db_path=temp_db,
-            enable_encryption=True,
-            encryption_key=good_key
+            db_path=temp_db, enable_encryption=True, encryption_key=good_key
         )
         storage = SQLiteStorage(temp_db, config)
         assert storage._encryption_key is not None
@@ -231,7 +230,7 @@ class TestSQLiteStorageEdgeCases:
 
     @pytest.fixture
     def temp_db(self):
-        fd, path = tempfile.mkstemp(suffix='.db')
+        fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         yield path
         if os.path.exists(path):
@@ -270,14 +269,14 @@ class TestSQLiteStorageEdgeCases:
     async def test_concurrent_operations(self, storage):
         """Конкурентные операции"""
         import asyncio
-        
+
         async def worker(i):
             for j in range(10):
                 key = f"key_{i}_{j}"
                 await storage.set(key, f"value_{i}_{j}".encode(), ttl=60)
                 result = await storage.get(key)
                 assert result == f"value_{i}_{j}".encode()
-        
+
         await asyncio.gather(*[worker(i) for i in range(5)])
 
 
@@ -287,7 +286,7 @@ class TestSQLiteStorageSync:
     @pytest.fixture
     def temp_db(self):
         """Создает временную БД для тестов"""
-        fd, path = tempfile.mkstemp(suffix='.db')
+        fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         yield path
         if os.path.exists(path):
@@ -336,11 +335,11 @@ class TestSQLiteStorageSync:
         storage.set_sync("key1", b"value1", ttl=1)
         storage.set_sync("key2", b"value2", ttl=1)
         storage.set_sync("key3", b"value3", ttl=100)  # Не истечет
-        
+
         time.sleep(1.1)
         removed = storage.cleanup_expired_sync()
         assert removed >= 2
-        
+
         assert storage.get_sync("key1") is None
         assert storage.get_sync("key2") is None
         assert storage.get_sync("key3") == b"value3"
@@ -349,8 +348,9 @@ class TestSQLiteStorageSync:
         """Шифрование работает в синхронных методах"""
         import base64
         import secrets
+
         encryption_key = base64.b64encode(secrets.token_bytes(32)).decode()
-        
+
         config = SQLiteCacheConfig(
             db_path=temp_db,
             enable_encryption=True,
@@ -367,14 +367,14 @@ class TestSQLiteStorageSync:
     def test_concurrent_sync_operations(self, storage):
         """Конкурентные синхронные операции"""
         import threading
-        
+
         def worker(i):
             for j in range(10):
                 key = f"key_{i}_{j}"
                 storage.set_sync(key, f"value_{i}_{j}".encode(), ttl=60)
                 result = storage.get_sync(key)
                 assert result == f"value_{i}_{j}".encode()
-        
+
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
         for t in threads:
             t.start()
@@ -387,4 +387,3 @@ class TestSQLiteStorageSync:
         storage.close_sync()
         # После close соединение должно быть None
         assert storage._sync_connection is None
-

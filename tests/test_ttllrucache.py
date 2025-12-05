@@ -1,7 +1,9 @@
-import pytest
-import time
 import asyncio
 import threading
+import time
+
+import pytest
+
 from cachka.ttllrucache import TTLLRUCache
 
 
@@ -85,17 +87,19 @@ class TestTTLLRUCacheLRU:
     """Тесты LRU eviction"""
 
     def test_lru_eviction(self):
-        cache = TTLLRUCache(maxsize=3, ttl=60, shards=1)  # Один шард для предсказуемости
+        cache = TTLLRUCache(
+            maxsize=3, ttl=60, shards=1
+        )  # Один шард для предсказуемости
         cache.set("key1", "value1")
         cache.set("key2", "value2")
         cache.set("key3", "value3")
         assert len(cache) == 3
-        
+
         # Add 4th item, should evict least recently used (key1)
         # key1 был добавлен первым и не использовался после этого
         cache.set("key4", "value4")
         assert len(cache) == 3
-        
+
         # key1 должен быть вытеснен (least recently used)
         assert cache.get("key1") is None
         # Остальные должны остаться
@@ -104,21 +108,23 @@ class TestTTLLRUCacheLRU:
         assert cache.get("key4") == "value4"
 
     def test_get_updates_lru(self):
-        cache = TTLLRUCache(maxsize=3, ttl=60, shards=1)  # Один шард для предсказуемости
+        cache = TTLLRUCache(
+            maxsize=3, ttl=60, shards=1
+        )  # Один шард для предсказуемости
         # Заполняем кэш
         cache.set("key1", "value1")
         cache.set("key2", "value2")
         cache.set("key3", "value3")
-        
+
         # Access key1 to make it most recently used
         # Это должно переместить key1 в конец LRU списка
         val = cache.get("key1")
         assert val == "value1"
-        
+
         # Add new item, should evict key2 (least recently used после key1)
         # Порядок LRU: key2 (старый), key3, key1 (обновлен), key4 (новый)
         cache.set("key4", "value4")
-        
+
         # key1 должен остаться (был обновлен через get)
         assert cache.get("key1") == "value1"
         # key2 должен быть вытеснен (least recently used)
@@ -128,14 +134,16 @@ class TestTTLLRUCacheLRU:
         assert cache.get("key4") == "value4"
 
     def test_set_updates_lru(self):
-        cache = TTLLRUCache(maxsize=3, ttl=60, shards=1)  # Один шард для предсказуемости
+        cache = TTLLRUCache(
+            maxsize=3, ttl=60, shards=1
+        )  # Один шард для предсказуемости
         cache.set("key1", "value1")
         cache.set("key2", "value2")
         cache.set("key3", "value3")
-        
+
         # Update key1 to make it most recently used
         cache.set("key1", "value1_updated")
-        
+
         # Add new item, should evict key2 (least recently used)
         cache.set("key4", "value4")
         assert cache.get("key1") == "value1_updated"  # Still there
@@ -152,7 +160,7 @@ class TestTTLLRUCacheSharding:
         # Add many keys
         for i in range(20):
             cache.set(f"key{i}", f"value{i}")
-        
+
         # Check that keys are distributed across shards
         shard_counts = [len(shard) for shard in cache._shards]
         # At least some keys should be in different shards
@@ -171,7 +179,7 @@ class TestTTLLRUCacheSharding:
         # Fill first shard
         cache.set("key0", "value0")
         cache.set("key2", "value2")  # Same shard as key0 (if hash % 2 == 0)
-        
+
         # Keys in different shards shouldn't affect each other's eviction
         # This is a basic test - full isolation requires more complex scenario
         assert len(cache) >= 1
@@ -183,24 +191,26 @@ class TestTTLLRUCacheGetOrSet:
     def test_get_or_set_existing(self):
         cache = TTLLRUCache(maxsize=10, ttl=60)
         cache.set("key1", "value1")
-        
+
         call_count = [0]
+
         def factory():
             call_count[0] += 1
             return "new_value"
-        
+
         result = cache.get_or_set("key1", factory)
         assert result == "value1"
         assert call_count[0] == 0  # Factory not called
 
     def test_get_or_set_new(self):
         cache = TTLLRUCache(maxsize=10, ttl=60)
-        
+
         call_count = [0]
+
         def factory():
             call_count[0] += 1
             return "new_value"
-        
+
         result = cache.get_or_set("key1", factory)
         assert result == "new_value"
         assert call_count[0] == 1  # Factory called once
@@ -209,19 +219,20 @@ class TestTTLLRUCacheGetOrSet:
     def test_get_or_set_thread_safe(self):
         cache = TTLLRUCache(maxsize=10, ttl=60)
         results = []
-        
+
         def worker():
             def factory():
                 return threading.current_thread().name
+
             result = cache.get_or_set("key1", factory)
             results.append(result)
-        
+
         threads = [threading.Thread(target=worker) for _ in range(10)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
-        
+
         # All should get the same value (first one to set)
         assert len(set(results)) == 1
 
@@ -234,7 +245,7 @@ class TestTTLLRUCacheCleanup:
         cache.set("key1", "value1")
         cache.set("key2", "value2")
         time.sleep(1.1)
-        
+
         removed = cache.cleanup()
         assert removed >= 2
         assert len(cache) == 0
@@ -244,7 +255,7 @@ class TestTTLLRUCacheCleanup:
         cache.set("key1", "value1")
         cache.set("key2", "value2")
         time.sleep(1.1)
-        
+
         removed = cache.cleanup()
         assert isinstance(removed, int)
         assert removed >= 0
@@ -255,7 +266,7 @@ class TestTTLLRUCacheCleanup:
         time.sleep(1.0)
         cache.set("key2", "value2")  # Won't expire yet
         time.sleep(1.1)  # key1 expired, key2 still valid
-        
+
         removed = cache.cleanup()
         assert removed >= 1
         assert cache.get("key2") == "value2"  # Still valid
@@ -295,11 +306,11 @@ class TestTTLLRUCacheAsync:
     @pytest.mark.asyncio
     async def test_get_or_set_async(self):
         cache = TTLLRUCache(maxsize=10, ttl=60)
-        
+
         async def factory():
             await asyncio.sleep(0.01)
             return "async_value"
-        
+
         result = await cache.get_or_set_async("key1", factory)
         assert result == "async_value"
         assert cache.get("key1") == "async_value"
@@ -312,13 +323,13 @@ class TestTTLLRUCacheBackgroundCleanup:
     async def test_background_cleanup_start_stop(self):
         cache = TTLLRUCache(maxsize=10, ttl=1)
         cache.set("key1", "value1")
-        
+
         await cache.start_background_cleanup(interval=1)
         assert cache._bg_task is not None
-        
+
         time.sleep(1.5)  # Wait for cleanup
         await asyncio.sleep(0.5)  # Give cleanup time to run
-        
+
         await cache.stop_background_cleanup()
         assert cache._bg_task is None
 
@@ -372,7 +383,7 @@ class TestTTLLRUCacheThreadSafety:
     def test_concurrent_get_set(self):
         cache = TTLLRUCache(maxsize=100, ttl=60)
         errors = []
-        
+
         def worker(i):
             try:
                 for j in range(10):
@@ -381,13 +392,13 @@ class TestTTLLRUCacheThreadSafety:
                     assert cache.get(key) == f"value_{i}_{j}"
             except Exception as e:
                 errors.append(e)
-        
+
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
-        
+
         assert len(errors) == 0
         assert len(cache) <= 100  # Should respect maxsize
 
@@ -396,17 +407,16 @@ class TestTTLLRUCacheThreadSafety:
         # Pre-populate
         for i in range(50):
             cache.set(f"key{i}", f"value{i}")
-        
+
         def worker():
             for i in range(50):
                 cache.delete(f"key{i}")
-        
+
         threads = [threading.Thread(target=worker) for _ in range(5)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
-        
+
         # All should be deleted
         assert len(cache) == 0
-

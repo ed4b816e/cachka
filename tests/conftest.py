@@ -1,9 +1,13 @@
 """
 Общие фикстуры для всех тестов
 """
+
 import pytest
-import asyncio
-from cachka import cache_registry, CacheConfig
+
+from cachka import (
+    CacheConfig,
+    cache_registry,
+)
 from cachka.sqlitecache import SQLiteCacheConfig
 
 
@@ -11,13 +15,10 @@ from cachka.sqlitecache import SQLiteCacheConfig
 def cache_config():
     """Базовая конфигурация кэша для тестов"""
     return CacheConfig(
-        cache_layers=[
-            "memory",
-            ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
-        ],
+        cache_layers=["memory", ("sqlite", SQLiteCacheConfig(db_path=":memory:"))],
         vacuum_interval=None,
         cleanup_on_start=False,
-        enable_metrics=False
+        enable_metrics=False,
     )
 
 
@@ -30,10 +31,10 @@ async def initialized_cache(cache_config):
             await cache_registry.shutdown()
         except:
             pass
-    
+
     cache_registry.initialize(cache_config)
     yield cache_registry.get()
-    
+
     # Cleanup после теста
     if cache_registry.is_initialized():
         try:
@@ -54,4 +55,3 @@ async def reset_cache_registry_after_test():
             pass
         # Сбрасываем состояние
         cache_registry.reset()
-

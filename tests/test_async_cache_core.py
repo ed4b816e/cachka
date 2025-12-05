@@ -1,9 +1,15 @@
-import pytest
 import time
-import asyncio
-from cachka.core import AsyncCache, CacheConfig, CircuitBreaker
+
+import pytest
+
+from cachka.core import (
+    AsyncCache,
+    CacheConfig,
+)
+from cachka.sqlitecache import (
+    SQLiteCacheConfig,
+)
 from cachka.ttllrucache import MemoryCacheConfig
-from cachka.sqlitecache import SQLiteCacheConfig, SQLiteStorage
 
 
 class TestAsyncCacheL1L2:
@@ -14,10 +20,10 @@ class TestAsyncCacheL1L2:
         return CacheConfig(
             cache_layers=[
                 ("memory", MemoryCacheConfig(maxsize=10, ttl=60)),
-                ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
+                ("sqlite", SQLiteCacheConfig(db_path=":memory:")),
             ],
             vacuum_interval=None,
-            cleanup_on_start=False
+            cleanup_on_start=False,
         )
 
     @pytest.fixture
@@ -33,7 +39,7 @@ class TestAsyncCacheL1L2:
         # Первый get загрузит в L1
         result1 = await cache.get("key1")
         assert result1 == "value1"
-        
+
         # Второй get должен быть из L1
         result2 = await cache.get("key1")
         assert result2 == "value1"
@@ -58,14 +64,11 @@ class TestAsyncCacheCircuitBreaker:
     @pytest.fixture
     def config(self):
         return CacheConfig(
-            cache_layers=[
-                "memory",
-                ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
-            ],
+            cache_layers=["memory", ("sqlite", SQLiteCacheConfig(db_path=":memory:"))],
             circuit_breaker_threshold=3,
             circuit_breaker_window=1,
             vacuum_interval=None,
-            cleanup_on_start=False
+            cleanup_on_start=False,
         )
 
     @pytest.fixture
@@ -88,11 +91,11 @@ class TestAsyncCacheCircuitBreaker:
         # Создаем ситуацию с ошибками (например, поврежденные данные)
         # Для этого нужно замокать storage или использовать реальную ошибку
         breaker = cache._circuit_breaker
-        
+
         # Симулируем ошибки
         for _ in range(3):
             breaker.call_failed()
-        
+
         assert breaker.state == "OPEN"
 
     @pytest.mark.asyncio
@@ -101,7 +104,7 @@ class TestAsyncCacheCircuitBreaker:
         breaker = cache._circuit_breaker
         breaker.state = "OPEN"
         breaker.last_failure_time = time.time()
-        
+
         # Get должен вернуть None из-за circuit breaker
         result = await cache.get("key1")
         assert result is None
@@ -112,7 +115,7 @@ class TestAsyncCacheCircuitBreaker:
         breaker = cache._circuit_breaker
         breaker.state = "OPEN"
         breaker.last_failure_time = time.time() - 2  # 2 секунды назад
-        
+
         # Должен перейти в HALF_OPEN
         assert breaker.can_execute() is True
         assert breaker.state == "HALF_OPEN"
@@ -122,7 +125,7 @@ class TestAsyncCacheCircuitBreaker:
         """Сброс при успехе"""
         breaker = cache._circuit_breaker
         breaker.state = "HALF_OPEN"
-        
+
         # Успешный вызов должен закрыть circuit breaker
         breaker.call_succeeded()
         assert breaker.state == "CLOSED"
@@ -135,12 +138,9 @@ class TestAsyncCacheMaintenance:
     @pytest.fixture
     def config(self):
         return CacheConfig(
-            cache_layers=[
-                "memory",
-                ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
-            ],
+            cache_layers=["memory", ("sqlite", SQLiteCacheConfig(db_path=":memory:"))],
             vacuum_interval=1,  # 1 second
-            cleanup_on_start=False
+            cleanup_on_start=False,
         )
 
     @pytest.fixture
@@ -166,12 +166,9 @@ class TestAsyncCacheMaintenance:
     async def test_no_maintenance_loop_when_disabled(self):
         """Нет цикла при vacuum_interval=None"""
         config = CacheConfig(
-            cache_layers=[
-                "memory",
-                ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
-            ],
+            cache_layers=["memory", ("sqlite", SQLiteCacheConfig(db_path=":memory:"))],
             vacuum_interval=None,
-            cleanup_on_start=False
+            cleanup_on_start=False,
         )
         cache = AsyncCache(config)
         assert cache._gc_task is None
@@ -183,10 +180,7 @@ class TestAsyncCacheHealthCheck:
 
     @pytest.fixture
     def config(self):
-        return CacheConfig(
-            vacuum_interval=None,
-            cleanup_on_start=False
-        )
+        return CacheConfig(vacuum_interval=None, cleanup_on_start=False)
 
     @pytest.fixture
     async def cache(self, config):
@@ -213,10 +207,7 @@ class TestAsyncCacheEdgeCases:
 
     @pytest.fixture
     def config(self):
-        return CacheConfig(
-            vacuum_interval=None,
-            cleanup_on_start=False
-        )
+        return CacheConfig(vacuum_interval=None, cleanup_on_start=False)
 
     @pytest.fixture
     async def cache(self, config):
@@ -234,12 +225,7 @@ class TestAsyncCacheEdgeCases:
     @pytest.mark.asyncio
     async def test_complex_objects(self, cache):
         """Сложные объекты"""
-        obj = {
-            "nested": {
-                "list": [1, 2, 3],
-                "dict": {"a": 1, "b": 2}
-            }
-        }
+        obj = {"nested": {"list": [1, 2, 3], "dict": {"a": 1, "b": 2}}}
         await cache.set("key1", obj, ttl=60)
         result = await cache.get("key1")
         assert result == obj
@@ -249,7 +235,7 @@ class TestAsyncCacheEdgeCases:
     async def test_graceful_shutdown(self, cache):
         """Корректное завершение"""
         from cachka.sqlitecache import SQLiteStorageAdapter
-        
+
         await cache.set("key1", "value1", ttl=60)
         await cache.graceful_shutdown()
         # После shutdown storage должен быть закрыт
@@ -257,7 +243,6 @@ class TestAsyncCacheEdgeCases:
         sqlite_closed = False
         for layer in cache._caches:
             if isinstance(layer, SQLiteStorageAdapter):
-                sqlite_closed = (layer._storage._connection is None)
+                sqlite_closed = layer._storage._connection is None
                 break
         assert sqlite_closed
-

@@ -1,7 +1,7 @@
 # 🌐 cachka
 
-> **Enterprise-grade hybrid cache for Python**  
-> Combines **in-memory (L1)** and **disk-based (L2)** caching with observability, encryption, and circuit breaking.  
+> **Enterprise-grade hybrid cache for Python**
+> Combines **in-memory (L1)** and **disk-based (L2)** caching with observability, encryption, and circuit breaking.
 > Works seamlessly in **async**, **sync**, and **threaded** environments.
 
 [![PyPI - Version](https://img.shields.io/pypi/v/cachka.svg)](https://pypi.org/project/cachka)
@@ -12,13 +12,13 @@
 
 ## ✨ Features
 
-- **Hybrid architecture**: L1 (memory) + L2 (SQLite disk)  
-- **Async & sync support**: Use the same decorator everywhere  
-- **TTL with smart LRU eviction** (no memory leaks)  
-- **Observability**: Prometheus metrics, OpenTelemetry tracing  
-- **Security**: AES-GCM encryption for disk storage  
-- **Resilience**: Circuit breaker, graceful degradation  
-- **Zero dependencies** for core functionality  
+- **Hybrid architecture**: L1 (memory) + L2 (SQLite disk)
+- **Async & sync support**: Use the same decorator everywhere
+- **TTL with smart LRU eviction** (no memory leaks)
+- **Observability**: Prometheus metrics, OpenTelemetry tracing
+- **Security**: AES-GCM encryption for disk storage
+- **Resilience**: Circuit breaker, graceful degradation
+- **Zero dependencies** for core functionality
 - **Type-safe**: Full type hints and Pydantic config
 
 ---
@@ -82,11 +82,11 @@ async def main():
     # First call - fetches data
     user1 = await fetch_user_data(1)
     print(user1)  # {"id": 1, "name": "User 1"}
-    
+
     # Second call - returns cached data (no API call)
     user1_cached = await fetch_user_data(1)
     print(user1_cached)  # {"id": 1, "name": "User 1"} (from cache)
-    
+
     # Cleanup
     await cache_registry.shutdown()
 
@@ -126,7 +126,7 @@ class UserService:
     async def get_user(self, user_id: int):
         # Cache key will be based on user_id only, not self instance
         return await self._fetch_from_db(user_id)
-    
+
     async def _fetch_from_db(self, user_id: int):
         # Database query simulation
         return {"id": user_id, "name": f"User {user_id}"}

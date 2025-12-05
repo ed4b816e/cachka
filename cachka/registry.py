@@ -1,6 +1,11 @@
 import threading
 from typing import Optional
-from .core import AsyncCache, CacheConfig
+
+from .core import (
+    AsyncCache,
+    CacheConfig,
+)
+
 
 class CacheRegistry:
     def __init__(self):
@@ -15,8 +20,12 @@ class CacheRegistry:
             if config is None:
                 # Дефолтная конфигурация: memory + sqlite
                 from cachka.sqlitecache import SQLiteCacheConfig
+
                 config = CacheConfig(
-                    cache_layers=["memory", ("sqlite", SQLiteCacheConfig(db_path="cache.db"))]
+                    cache_layers=[
+                        "memory",
+                        ("sqlite", SQLiteCacheConfig(db_path="cache.db")),
+                    ]
                 )
             self._instance = AsyncCache(config)
             self._initialized = True
@@ -40,6 +49,7 @@ class CacheRegistry:
         with self._lock:
             self._initialized = False
             self._instance = None
+
 
 # Global singleton
 cache_registry = CacheRegistry()

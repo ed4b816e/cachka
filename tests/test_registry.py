@@ -1,6 +1,12 @@
 import pytest
-from cachka.registry import CacheRegistry, cache_registry
-from cachka.core import CacheConfig, AsyncCache
+
+from cachka.core import (
+    AsyncCache,
+    CacheConfig,
+)
+from cachka.registry import (
+    CacheRegistry,
+)
 
 
 class TestCacheRegistry:
@@ -17,14 +23,14 @@ class TestCacheRegistry:
 
     @pytest.mark.asyncio
     async def test_initialize_custom_config(self):
-        from cachka.ttllrucache import MemoryCacheConfig
         from cachka.sqlitecache import SQLiteCacheConfig
-        
+        from cachka.ttllrucache import MemoryCacheConfig
+
         registry = CacheRegistry()
         config = CacheConfig(
             cache_layers=[
                 ("memory", MemoryCacheConfig(maxsize=2048, ttl=600)),
-                ("sqlite", SQLiteCacheConfig(db_path=":memory:"))
+                ("sqlite", SQLiteCacheConfig(db_path=":memory:")),
             ]
         )
         registry.initialize(config)
@@ -94,16 +100,15 @@ class TestGlobalCacheRegistry:
     async def test_global_registry_singleton(self):
         """Глобальный registry - singleton"""
         from cachka.registry import cache_registry
-        
+
         # Если не инициализирован, должен быть один и тот же объект
         assert cache_registry is cache_registry
-        
+
         # Инициализируем
         if not cache_registry.is_initialized():
             cache_registry.initialize()
-        
+
         # Получаем два раза - должен быть один экземпляр
         cache1 = cache_registry.get()
         cache2 = cache_registry.get()
         assert cache1 is cache2
-

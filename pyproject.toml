@@ -32,11 +32,13 @@ dependencies = [
 prometheus = ["prometheus-client>=0.19.0"]
 tracing = ["opentelemetry-api>=1.20.0", "opentelemetry-sdk>=1.20.0"]
 encryption = ["cryptography>=41.0.0"]
+redis = ["redis>=5.0.0"]
 full = [
     "prometheus-client>=0.19.0",
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
     "cryptography>=41.0.0",
+    "redis>=5.0.0",
 ]
 dev = [
     "pytest>=8.4.2",
@@ -44,6 +46,8 @@ dev = [
     "pytest-timeout>=2.4.0",
     "mypy>=1.5.0",
     "ruff>=0.1.0",
+    "pre-commit>=4.2.0",
+    "testcontainers>=4.0.0",
     "cachka[prometheus,tracing,encryption]",
 ]
 
@@ -69,8 +73,6 @@ exclude = '''
   | \.mypy_cache
   | \.tox
   | \.venv
-  | *.db
-  | *.db-*
   | venv
   | _build
   | buck-out
@@ -108,7 +110,7 @@ extend-select = [
     "RUF100",    # unused noqa
     "UP",  # pyupgrade
 ]
-ignore = ["A001", "A003", "E711", "F841", "B008", "C901", "C408", "SIM102", "ANN401", "S104", "I001", "B904", "UP008", "S101", "S311", "A002", "E501"]
+ignore = ["S110", "B027", "S301", "SIM105", "E722", "A001", "A003", "E711", "F841", "B008", "C901", "C408", "SIM102", "ANN401", "S104", "I001", "B904", "UP008", "S101", "S311", "A002", "E501"]
 exclude = []
 
 [tool.typos.files]
