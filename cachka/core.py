@@ -9,6 +9,7 @@ from typing import (
     Union,
 )
 
+from cachka.constants import Intervals
 from cachka.interface import ICache
 from cachka.sqlitecache import (
     SQLiteCacheConfig,
@@ -78,7 +79,7 @@ class CacheConfig:
     """Основная конфигурация кэша"""
 
     name: str = "default"
-    vacuum_interval: Optional[int] = 3600
+    vacuum_interval: Optional[int] = Intervals.ONE_HOUR
     cleanup_on_start: bool = True
     enable_metrics: bool = False
     circuit_breaker_threshold: int = 50

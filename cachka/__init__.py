@@ -3,6 +3,7 @@ import inspect
 from logging import getLogger
 from typing import Callable
 
+from .constants import Intervals
 from .core import CacheConfig
 from .interface import ICache
 from .registry import cache_registry
@@ -38,6 +39,7 @@ __all__ = [
     "ICache",
     "TTLLRUCacheAdapter",
     "SQLiteStorageAdapter",
+    "Intervals",
 ]
 
 if _HAS_REDIS:
@@ -48,7 +50,7 @@ logger = getLogger(__name__)
 
 
 def cached(
-    ttl: int = 300,
+    ttl: int = Intervals.FIVE_MINUTES,
     ignore_self: bool = False,
     simplified_self_serialization: bool = False,
 ):
