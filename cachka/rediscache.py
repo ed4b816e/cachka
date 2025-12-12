@@ -1,10 +1,11 @@
 """
 Redis кэш: реализация, конфигурация и адаптер.
 """
-import asyncio
 import dataclasses
 import pickle
 from typing import Any, Optional
+
+from typing_extensions import Protocol
 
 from cachka.interface import ICache
 
@@ -15,8 +16,10 @@ try:
     HAS_REDIS = True
 except ImportError:
     HAS_REDIS = False
-    redis = None
-    aioredis = None
+    class redis(Protocol):
+        __slots__ = ["Redis"]
+    class aioredis(Protocol):
+        __slots__ = ["Redis"]
 
 
 # === Config ===
