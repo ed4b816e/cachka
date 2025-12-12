@@ -54,9 +54,16 @@ try:
 except ImportError:
     HAS_OTEL = False
 
+    class DummySpanKind:
+        def __getattr__(self, item):
+            pass
+
     class DummyTracer:
         def start_as_current_span(self, *a, **kw):
             return self
+
+        def set_attribute(self, *a, **kw):
+            pass
 
         def __enter__(self):
             return self
@@ -64,6 +71,7 @@ except ImportError:
         def __exit__(self, *a):
             pass
 
+    SpanKind = DummySpanKind()
     trace = type("trace", (), {"get_tracer": lambda *a: DummyTracer()})
 
 
