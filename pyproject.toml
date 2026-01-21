@@ -52,9 +52,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ed4b816e/cachka"
-Repository = "https://github.com/ed4b816e/cachka"
-Documentation = "https://github.com/ed4b816e/cachka#readme"
+Homepage = "https://github.com/hello-tmst/cachka"
+Repository = "https://github.com/hello-tmst/cachka"
+Documentation = "https://github.com/hello-tmst/cachka#readme"
 
 [tool.hatch.build.targets.wheel]
 packages = ["cachka"]
