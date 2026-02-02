@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import inspect
 
 import pytest
@@ -487,8 +488,8 @@ class TestDecoratorMetadata:
         assert "x" in my_function.__annotations__
         assert "y" in my_function.__annotations__
         assert "return" in my_function.__annotations__
-        assert isinstance(my_function.__annotations__["x"], int)
-        assert isinstance(my_function.__annotations__["return"], dict)
+        assert my_function.__annotations__["x"] is int
+        assert my_function.__annotations__["return"] is dict
 
     def test_preserves_function_signature(self):
         """Сохранение сигнатуры"""
@@ -500,7 +501,7 @@ class TestDecoratorMetadata:
         sig = inspect.signature(my_function)
         assert "x" in sig.parameters
         assert "y" in sig.parameters
-        assert isinstance(sig.return_annotation, dict)
+        assert sig.return_annotation is dict
 
 
 class TestDecoratorEdgeCases:
@@ -583,3 +584,209 @@ class TestDecoratorEdgeCases:
         result2 = fib(10)
         assert result2 == 55
         assert call_count[0] == 0  # Не должна вызываться снова
+
+
+# Декоратор-заглушка для тестирования вложенных декораторов
+def data_transfer(return_type):
+    """Простой декоратор-заглушка, аналог @data_transfer из примера пользователя"""
+
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            result = await func(*args, **kwargs)
+            return result  # Простая заглушка, просто возвращает результат
+
+        return wrapper
+
+    return decorator
+
+
+# Глобальный класс для тестов с вложенными декораторами (чтобы pickle мог его сериализовать)
+class ServiceWithNestedDecorators:
+    """Глобальный класс для теста вложенных декораторов"""
+
+    def __init__(self, name: str = "default"):
+        self.name = name
+
+    @cached(simplified_self_serialization=True, ttl=30)
+    @data_transfer(None)
+    async def get_by_publisher(self, publisher: str) -> str:
+        """Метод с вложенными декораторами"""
+        # Имитация работы с данными
+        return f"data_for_{publisher}"
+
+
+class TestDecoratorWithNestedDecorators:
+    """Тесты декоратора @cached с вложенными декораторами"""
+
+    @pytest.fixture(autouse=True)
+    async def setup_cache(self):
+        # Сбрасываем перед инициализацией
+        if cache_registry.is_initialized():
+            try:
+                await cache_registry.shutdown()
+            except:
+                pass
+            cache_registry.reset()
+
+        config = CacheConfig(
+            cache_layers=["memory", ("sqlite", SQLiteCacheConfig(db_path=":memory:"))],
+            vacuum_interval=None,
+            cleanup_on_start=False,
+        )
+        cache_registry.initialize(config)
+        yield
+        if cache_registry.is_initialized():
+            try:
+                await cache_registry.shutdown()
+            except:
+                pass
+            cache_registry.reset()
+
+    @pytest.mark.asyncio
+    async def test_cached_above_other_decorator_with_simplified_self(self):
+        """Тест работы @cached выше другого декоратора с simplified_self_serialization=True"""
+        call_count = [0]
+
+        # Используем глобальный класс для pickle
+        class ServiceWithNestedLocal(ServiceWithNestedDecorators):
+            @cached(simplified_self_serialization=True, ttl=30)
+            @data_transfer(None)
+            async def get_by_publisher(self, publisher: str) -> str:
+                call_count[0] += 1
+                return f"data_for_{publisher}"
+
+        # Создаем два разных экземпляра класса
+        service1 = ServiceWithNestedLocal("service1")
+        service2 = ServiceWithNestedLocal("service2")
+
+        # Первый вызов - должен выполниться
+        result1 = await service1.get_by_publisher("test_publisher")
+        assert result1 == "data_for_test_publisher"
+        assert call_count[0] == 1
+
+        # Второй вызов с другим экземпляром, но теми же аргументами
+        # Должен использовать кэш благодаря simplified_self_serialization=True
+        result2 = await service2.get_by_publisher("test_publisher")
+        assert result2 == "data_for_test_publisher"
+        assert call_count[0] == 1  # Не должна вызваться снова
+
+        # Третий вызов с первым экземпляром - также должен использовать кэш
+        result3 = await service1.get_by_publisher("test_publisher")
+        assert result3 == "data_for_test_publisher"
+        assert call_count[0] == 1  # Все еще не должна вызваться снова
+
+        # Вызов с другими аргументами - должна вызваться снова
+        result4 = await service1.get_by_publisher("other_publisher")
+        assert result4 == "data_for_other_publisher"
+        assert call_count[0] == 2  # Должна вызваться снова для новых аргументов
+
+    @pytest.mark.asyncio
+    async def test_cached_with_non_serializable_self_object(self):
+        """Тест работы @cached с несериализуемым объектом в self"""
+        call_count = [0]
+
+        # Создаем объект с локальной функцией (аналог SQLAlchemy session с create_engine.<locals>.connect)
+        def create_non_serializable_object():
+            """Создает объект с локальной функцией, которая не может быть сериализована через pickle"""
+            def local_function():
+                return "local"
+
+            class NonSerializableObject:
+                def __init__(self):
+                    self.local_func = local_function
+                    self.name = "test_object"
+
+            return NonSerializableObject()
+
+        # Глобальный класс для теста
+        class ServiceWithNonSerializableSelf:
+            def __init__(self):
+                # Создаем несериализуемый объект в self
+                self.non_serializable = create_non_serializable_object()
+                self.name = "service"
+
+            @cached(simplified_self_serialization=True, ttl=30)
+            async def get_data(self, key: str) -> str:
+                call_count[0] += 1
+                return f"data_for_{key}"
+
+        # Создаем два разных экземпляра с несериализуемыми объектами
+        service1 = ServiceWithNonSerializableSelf()
+        service2 = ServiceWithNonSerializableSelf()
+
+        # Первый вызов - должен выполниться без ошибок pickle
+        result1 = await service1.get_data("test_key")
+        assert result1 == "data_for_test_key"
+        assert call_count[0] == 1
+
+        # Второй вызов с другим экземпляром - должен использовать кэш
+        # Без simplified_self_serialization это вызвало бы ошибку pickle
+        result2 = await service2.get_data("test_key")
+        assert result2 == "data_for_test_key"
+        assert call_count[0] == 1  # Не должна вызваться снова
+
+        # Третий вызов - также должен использовать кэш
+        result3 = await service1.get_data("test_key")
+        assert result3 == "data_for_test_key"
+        assert call_count[0] == 1  # Все еще не должна вызваться снова
+
+    @pytest.mark.asyncio
+    async def test_cached_with_non_serializable_self_and_nested_decorator(self):
+        """Тест работы @cached выше другого декоратора с несериализуемым объектом в self"""
+        call_count = [0]
+
+        # Создаем объект с локальной функцией (аналог SQLAlchemy create_engine.<locals>.connect)
+        def create_non_serializable_object():
+            """Создает объект с локальной функцией, которая не может быть сериализована через pickle"""
+            def local_function():
+                return "local"
+
+            class NonSerializableObject:
+                def __init__(self):
+                    self.local_func = local_function
+                    self.name = "test_object"
+
+            return NonSerializableObject()
+
+        # Глобальный класс для теста (аналог DocumentSnapshotRepository из реального примера)
+        class ServiceWithNonSerializableSelfAndNested:
+            def __init__(self):
+                # Создаем несериализуемый объект в self (аналог SQLAlchemy session)
+                self.non_serializable = create_non_serializable_object()
+                self.name = "service"
+
+            @cached(simplified_self_serialization=True, ttl=30)
+            @data_transfer(None)
+            async def get_by_id(self, item_id: str) -> str:
+                """Метод с вложенными декораторами и несериализуемым self"""
+                call_count[0] += 1
+                return f"item_{item_id}"
+
+        # Создаем два разных экземпляра с несериализуемыми объектами
+        service1 = ServiceWithNonSerializableSelfAndNested()
+        service2 = ServiceWithNonSerializableSelfAndNested()
+
+        # Первый вызов - должен выполниться без ошибок pickle
+        # Без simplified_self_serialization это вызвало бы:
+        # AttributeError: Can't get local object 'create_non_serializable_object.<locals>.local_function'
+        result1 = await service1.get_by_id("123")
+        assert result1 == "item_123"
+        assert call_count[0] == 1
+
+        # Второй вызов с другим экземпляром - должен использовать кэш
+        # Это проверяет, что inspect.unwrap() работает правильно с вложенными декораторами
+        # и что simplified_self_serialization исключает self из аргументов
+        result2 = await service2.get_by_id("123")
+        assert result2 == "item_123"
+        assert call_count[0] == 1  # Не должна вызваться снова
+
+        # Третий вызов с первым экземпляром - также должен использовать кэш
+        result3 = await service1.get_by_id("123")
+        assert result3 == "item_123"
+        assert call_count[0] == 1  # Все еще не должна вызваться снова
+
+        # Вызов с другими аргументами - должна вызваться снова
+        result4 = await service1.get_by_id("456")
+        assert result4 == "item_456"
+        assert call_count[0] == 2  # Должна вызваться снова для новых аргументов

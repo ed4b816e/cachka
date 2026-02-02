@@ -21,9 +21,11 @@ def _is_class_method(func: Callable, args: tuple) -> bool:
 
     Проверяет, что первый аргумент является экземпляром класса,
     который содержит метод с именем функции.
+    
+    Работает даже если функция обернута другими декораторами.
 
     Args:
-        func: Функция для проверки
+        func: Функция для проверки (может быть обернута декораторами)
         args: Аргументы функции
 
     Returns:
@@ -38,8 +40,16 @@ def _is_class_method(func: Callable, args: tuple) -> bool:
     if not hasattr(first_arg, "__class__"):
         return False
 
-    # Получаем имя функции (может быть обернуто декоратором)
-    func_name = getattr(func, "__name__", None)
+    # Распаковываем функцию, если она обернута декораторами
+    # inspect.unwrap() рекурсивно распаковывает цепочку декораторов
+    try:
+        unwrapped_func = inspect.unwrap(func)
+    except (AttributeError, ValueError):
+        # Если распаковка не удалась, используем оригинальную функцию
+        unwrapped_func = func
+
+    # Получаем имя функции из распакованной функции
+    func_name = getattr(unwrapped_func, "__name__", None)
     if not func_name:
         return False
 
@@ -54,7 +64,6 @@ def _is_class_method(func: Callable, args: tuple) -> bool:
             attr = getattr(cls, func_name)
             if inspect.ismethod(attr) or inspect.isfunction(attr):
                 # Если метод с таким именем существует в классе, это метод класса
-                # Не проверяем точное совпадение функции, так как она может быть обернута декоратором
                 return True
 
     return False
@@ -98,16 +107,22 @@ def prepare_cache_key(
     # Автоматически определяем, является ли функция методом класса
     is_method = _is_class_method(func, args)
 
+    # Распаковываем функцию для получения оригинального имени метода
+    try:
+        unwrapped_func = inspect.unwrap(func)
+    except (AttributeError, ValueError):
+        unwrapped_func = func
+
     # Если это метод класса и включена упрощенная сериализация
     if use_simplified_serialization and is_method and args:
         # Исключаем self из аргументов
         key_args = args[1:]
         # Включаем имя класса в идентификатор функции
         class_name = args[0].__class__.__name__
-        func_identifier = f"{class_name}.{func.__name__}"
+        func_identifier = f"{class_name}.{unwrapped_func.__name__}"
     else:
         # Используем все аргументы
         key_args = args
-        func_identifier = func.__name__
+        func_identifier = unwrapped_func.__name__
 
     return make_cache_key(func_identifier, key_args, kwargs)
