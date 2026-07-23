@@ -58,6 +58,10 @@ class RedisCache:
         self._async_pool: Optional[aioredis.ConnectionPool] = None
         self._sync_pool: Optional[redis.ConnectionPool] = None
     
+    def get_async_client(self) -> aioredis.Redis:
+        """Публичный доступ к async Redis клиенту (для rate limiter и др.)."""
+        return self._get_async_client()
+
     def _get_async_client(self) -> aioredis.Redis:
         """Получить или создать async Redis клиент"""
         if self._async_client is None:
@@ -258,4 +262,8 @@ class RedisCacheAdapter(ICache):
     def close_sync(self) -> None:
         """Синхронное закрытие кэша"""
         self._cache.close_sync()
+
+    def get_async_client(self):
+        """Async Redis client from the underlying RedisCache."""
+        return self._cache.get_async_client()
 

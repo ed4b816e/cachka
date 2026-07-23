@@ -21,6 +21,7 @@
 - **Zero dependencies** for core functionality (SQLite included)
 - **Type-safe**: Full type hints and dataclass configs
 - **Redis support**: Optional Redis backend for distributed caching
+- **Rate limiter**: Redis sliding-window limiter for external APIs (optional)
 
 ---
 
@@ -256,6 +257,58 @@ cache_registry.initialize(config)
 async def get_data(key: str):
     return {"data": f"value for {key}"}
 ```
+
+### Rate Limiter (Optional Redis)
+
+Distributed or in-process sliding-window rate limiter.
+Independent from `cache_layers` — choose backend explicitly.
+
+```python
+# Install redis backend: pip install cachka[redis]
+
+from cachka import (
+    cache_registry,
+    CacheConfig,
+    rate_limited,
+    RateLimiterConfig,
+    RateLimitExceeded,
+)
+from cachka.rediscache import RedisCacheConfig
+
+# 1) Cache for @cached (can stay memory-only)
+cache_registry.initialize(
+    CacheConfig(cache_layers=["memory"], vacuum_interval=None, cleanup_on_start=False)
+)
+
+# 2) Rate limiter — call once at startup (own backend + redis when needed)
+cache = cache_registry.get()
+cache.init_rate_limiter(
+    {
+        "external_api": RateLimiterConfig(
+            max_requests=60,
+            window_seconds=60,
+            max_wait_sec=30.0,
+        ),
+    },
+    backend="redis",  # or "memory" for single-process / tests
+    redis=RedisCacheConfig(host="localhost", port=6379),
+)
+
+@rate_limited(tag="external_api")
+async def fetch_external(query: str):
+    ...
+```
+
+- Call `init_rate_limiter` **once per process**. Re-init overwrites profiles and does **not** close the previous Redis client; clean up with `cache_registry.shutdown()` / `graceful_shutdown()`.
+- `backend="redis"` — shared quota across workers (needs `redis=RedisCacheConfig(...)`)
+- `backend="memory"` — in-process only (no Redis)
+- Redis key shape: `rate_limit:<tag>:<identifier>` (e.g. `rate_limit:external_api:default`)
+- Optional `identifier` on `@rate_limited` splits buckets inside one tag
+
+On Redis connection errors the Redis limiter **fails open**.
+If the quota is exhausted / wait times out, `@rate_limited` raises `RateLimitExceeded`.
+
+Low-level `RateLimiter` / `MemoryRateLimiter` classes are still available.
 
 ### Graceful Shutdown
 
@@ -518,6 +571,16 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - `cache_registry.get()` - Get cache instance
 - `cache_registry.shutdown()` - Shutdown cache
 - `cache_registry.reset()` - Reset registry
+
+### Rate Limiter (optional)
+
+- `cache.init_rate_limiter(profiles, backend="redis"|"memory", redis=...)` — register profiles (once per process)
+- Re-init is overwritten in place; previous Redis client is not closed — use `graceful_shutdown()`
+- `backend="redis"` requires `redis=RedisCacheConfig(...)` and `cachka[redis]`
+- `backend="memory"` — in-process limiter (no Redis)
+- `cache.get_rate_limiter(tag)` / `@rate_limited(tag="...")`
+- `RateLimiter` / `MemoryRateLimiter` / `RateLimiterConfig` / `RateLimitExceeded`
+- Redis key: `rate_limit:<tag>:<identifier>`
 
 ### Cache Interface
 

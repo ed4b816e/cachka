@@ -6,6 +6,11 @@ from typing import Callable
 from .constants import Intervals
 from .core import CacheConfig
 from .interface import ICache
+from .rate_limiter import (
+    MemoryRateLimiter,
+    RateLimitExceeded,
+    RateLimiterConfig,
+)
 from .registry import cache_registry
 from .sqlitecache import (
     SQLiteCacheConfig,
@@ -23,15 +28,18 @@ try:
         RedisCacheAdapter,
         RedisCacheConfig,
     )
+    from .rate_limiter import RateLimiter
 
     _HAS_REDIS = True
 except ImportError:
     _HAS_REDIS = False
     RedisCacheAdapter = None
     RedisCacheConfig = None
+    RateLimiter = None
 
 __all__ = [
     "cached",
+    "rate_limited",
     "cache_registry",
     "CacheConfig",
     "MemoryCacheConfig",
@@ -40,10 +48,19 @@ __all__ = [
     "TTLLRUCacheAdapter",
     "SQLiteStorageAdapter",
     "Intervals",
+    "RateLimiterConfig",
+    "RateLimitExceeded",
+    "MemoryRateLimiter",
 ]
 
 if _HAS_REDIS:
-    __all__.extend(["RedisCacheConfig", "RedisCacheAdapter"])
+    __all__.extend(
+        [
+            "RedisCacheConfig",
+            "RedisCacheAdapter",
+            "RateLimiter",
+        ]
+    )
 
 
 logger = getLogger(__name__)
@@ -116,4 +133,61 @@ def cached(
     return decorator
 
 
-# __all__ определяется динамически в зависимости от наличия Redis
+def rate_limited(
+    tag: str,
+    *,
+    wait: bool = True,
+    identifier: str = "default",
+):
+    """
+    Decorator that enforces a named rate limiter profile.
+
+    Profiles must be registered first::
+
+        cache = cache_registry.get()
+        cache.init_rate_limiter(
+            {"external_api": RateLimiterConfig(max_requests=60, window_seconds=60)},
+            backend="redis",
+            redis=RedisCacheConfig(host="localhost", port=6379),
+        )
+
+        @rate_limited(tag="external_api")
+        async def fetch():
+            ...
+
+    Args:
+        tag: Profile name from init_rate_limiter(...)
+        wait: If True, wait until a slot is free (or timeout). If False, check once.
+        identifier: Extra bucket id inside the tag (default: "default")
+
+    Raises:
+        RateLimitExceeded: when the request is not allowed
+        RuntimeError: if cache / rate limiter is not initialized
+        KeyError: if tag is unknown
+        TypeError: if used on a sync function
+    """
+
+    def decorator(func: Callable):
+        if not inspect.iscoroutinefunction(func):
+            raise TypeError(
+                "@rate_limited currently supports async functions only"
+            )
+
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            cache = cache_registry.get()
+            limiter = cache.get_rate_limiter(tag)
+
+            if wait:
+                allowed = await limiter.wait_until_allowed(identifier=identifier)
+            else:
+                allowed = await limiter.is_request_allowed(identifier=identifier)
+
+            if not allowed:
+                raise RateLimitExceeded(tag=tag, identifier=identifier)
+
+            return await func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator

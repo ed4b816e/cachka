@@ -4,6 +4,7 @@ import secrets
 import threading
 import time
 from typing import (
+    TYPE_CHECKING,
     Any,
     Optional,
     Union,
@@ -22,20 +23,36 @@ from cachka.ttllrucache import (
     TTLLRUCacheAdapter,
 )
 
-# Redis - опциональная зависимость
+# Redis cache layer - опциональная зависимость
 try:
     from cachka.rediscache import (
+        HAS_REDIS as _REDISCACHE_HAS_REDIS,
         RedisCache,
         RedisCacheAdapter,
         RedisCacheConfig,
     )
 
-    HAS_REDIS = True
+    HAS_REDIS = _REDISCACHE_HAS_REDIS
 except ImportError:
     HAS_REDIS = False
     RedisCache = None
     RedisCacheAdapter = None
     RedisCacheConfig = None
+
+from cachka.rate_limiter import (
+    MemoryRateLimiter,
+    RateLimiter,
+    RateLimiterConfig,
+)
+
+if TYPE_CHECKING:
+    from cachka.rate_limiter import RateLimiterConfig as RateLimiterConfigT
+    from cachka.rate_limiter import RateLimiterLike as RateLimiterT
+    from cachka.rediscache import RedisCacheConfig as RedisCacheConfigT
+else:
+    RateLimiterT = Any
+    RateLimiterConfigT = Any
+    RedisCacheConfigT = Any
 
 # === Optional deps ===
 try:
@@ -248,6 +265,125 @@ class AsyncCache(ICache):
 
         if config.vacuum_interval:
             self._gc_task = asyncio.create_task(self._maintenance_loop())
+
+        # Rate limiters by tag (initialized via init_rate_limiter)
+        self._rate_limiters: dict[str, Any] = {}
+        self._rate_limiter_redis: Any = None  # RedisCache owned by rate limiter
+        self._rate_limiter_backend: Optional[str] = None
+
+    def init_rate_limiter(
+        self,
+        profiles: dict[str, "RateLimiterConfigT"],
+        *,
+        backend: str = "redis",
+        redis: Optional["RedisCacheConfigT"] = None,
+    ) -> None:
+        """
+        Initialize named rate limiter profiles on this cache instance.
+
+        Call once after cache_registry.initialize(...) / cache_registry.get().
+        Independent from cache_layers — pass backend explicitly.
+
+        Re-calling overwrites profiles in place and does not close a previous
+        Redis client; use cache_registry.shutdown() / graceful_shutdown() for
+        cleanup. Prefer a single init per process lifetime.
+
+        Args:
+            profiles: mapping tag -> RateLimiterConfig
+            backend: "redis" (shared across replicas) or "memory" (this process only)
+            redis: RedisCacheConfig, required when backend="redis"
+        """
+        if self._rate_limiters or self._rate_limiter_redis is not None:
+            logger.warning(
+                "rate_limiter_reinitialized",
+                previous_backend=self._rate_limiter_backend,
+                previous_tags=list(self._rate_limiters),
+                message=(
+                    "init_rate_limiter called more than once; previous Redis client "
+                    "is not closed. Call once at startup; cleanup via graceful_shutdown()."
+                ),
+            )
+
+        backend_normalized = backend.lower().strip()
+        if backend_normalized not in {"memory", "redis"}:
+            raise ValueError(
+                f"Unsupported rate limiter backend {backend!r}. Use 'memory' or 'redis'."
+            )
+        if not profiles:
+            raise ValueError("profiles must not be empty")
+
+        limiters: dict[str, RateLimiterT] = {}
+
+        if backend_normalized == "memory":
+            for tag, cfg in profiles.items():
+                if not tag or not isinstance(tag, str):
+                    raise ValueError(f"Invalid rate limiter tag: {tag!r}")
+                if not isinstance(cfg, RateLimiterConfig):
+                    raise TypeError(
+                        f"Profile {tag!r} must be RateLimiterConfig, got {type(cfg)}"
+                    )
+                prefix = f"{cfg.key_prefix.rstrip(':')}:{tag}"
+                limiters[tag] = MemoryRateLimiter(
+                    config=dataclasses.replace(cfg, key_prefix=prefix),
+                )
+        else:
+            if not HAS_REDIS or RedisCache is None or RedisCacheConfig is None:
+                raise ImportError(
+                    "Redis is not installed. To use backend='redis', install:\n"
+                    "  pip install cachka[redis]"
+                )
+            if redis is None:
+                raise ValueError(
+                    "redis=RedisCacheConfig(...) is required when backend='redis'"
+                )
+            if not isinstance(redis, RedisCacheConfig):
+                raise TypeError(
+                    f"redis must be RedisCacheConfig, got {type(redis)}"
+                )
+
+            redis_cache = RedisCache(redis)
+            self._rate_limiter_redis = redis_cache
+            redis_session = redis_cache.get_async_client()
+
+            for tag, cfg in profiles.items():
+                if not tag or not isinstance(tag, str):
+                    raise ValueError(f"Invalid rate limiter tag: {tag!r}")
+                if not isinstance(cfg, RateLimiterConfig):
+                    raise TypeError(
+                        f"Profile {tag!r} must be RateLimiterConfig, got {type(cfg)}"
+                    )
+                prefix = f"{cfg.key_prefix.rstrip(':')}:{tag}"
+                limiters[tag] = RateLimiter(
+                    redis_session=redis_session,
+                    config=dataclasses.replace(cfg, key_prefix=prefix),
+                )
+
+        self._rate_limiters = limiters
+        self._rate_limiter_backend = backend_normalized
+        logger.info(
+            "rate_limiters_initialized",
+            backend=backend_normalized,
+            tags=list(limiters.keys()),
+        )
+
+    def get_rate_limiter(self, tag: str) -> RateLimiterT:
+        """Get a previously initialized rate limiter by tag."""
+        if not self._rate_limiters:
+            raise RuntimeError(
+                "Rate limiter is not initialized. "
+                "Call cache.init_rate_limiter({...}) after cache_registry.get()."
+            )
+        try:
+            return self._rate_limiters[tag]
+        except KeyError as e:
+            known = sorted(self._rate_limiters)
+            raise KeyError(
+                f"Unknown rate limiter tag {tag!r}. Known tags: {known}"
+            ) from e
+
+    def list_rate_limiter_tags(self) -> list[str]:
+        """Return initialized rate limiter tags."""
+        return sorted(self._rate_limiters)
 
     def _init_metrics(self, cache_name: str):
         from prometheus_client import (
@@ -513,6 +649,15 @@ class AsyncCache(ICache):
                 await cache.close()
             except Exception as e:
                 logger.warning("cache_close_error", error=str(e))
+
+        if self._rate_limiter_redis is not None:
+            try:
+                await self._rate_limiter_redis.close()
+            except Exception as e:
+                logger.warning("rate_limiter_redis_close_error", error=str(e))
+            self._rate_limiter_redis = None
+        self._rate_limiters = {}
+        self._rate_limiter_backend = None
 
     def get_metrics_text(self) -> str:
         return generate_latest().decode("utf-8")
